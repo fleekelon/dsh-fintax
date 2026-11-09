@@ -1,0 +1,40 @@
+{
+  "name": "dsh-fintax",
+  "version": "0.2.0",
+  "description": "财税工作台：基于 IMA 知识库的政策引证问答、跨境电商合规自查、税额试算。FinTax workbench for DeepSeek Harness.",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "lib",
+    "skills",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "fintax",
+    "财税",
+    "跨境电商",
+    "合规",
+    "ima"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/fleekelon/dsh-fintax#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fleekelon/dsh-fintax.git"
+  },
+  "scripts": {
+    "test": "node --test test/calc.test.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=18.17.0",
+    "dsh": ">=0.2.1-rc.2 <0.4.0"
+  }
+}
