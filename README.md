@@ -1,5 +1,11 @@
 # dsh-fintax — 财税工作台
 
+[![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![DSH Plugin](https://img.shields.io/badge/DSH-plugin-4fc3f7)](https://github.com/topics/dsh-plugin)
+
+<img src="assets/icon.svg" width="80" alt="dsh-fintax icon">
+
 DeepSeek Harness 插件：把财税专业工作流装进 Agent。
 
 - **政策引证问答**：检索你 IMA 知识库里的政策原文与解读，回答附来源，查不到就明说，绝不编造文号。
@@ -12,17 +18,27 @@ DeepSeek Harness 插件：把财税专业工作流装进 Agent。
   - 外贸企业出口退税免退税（孰低规则、征退税率差转成本、9810 预退税提示）
   - 综试区零售出口核定征收企业所得税（4% 所得率、小微叠加、9810 口径收紧预警）
 
+## 实测效果
+
+真实模型端到端测试：问"1000 元商品走跨境电商零售进口交多少综合税"，Agent 自动检索知识库 → 核对政策原文（gov.cn）→ 调用工具计算 → 输出带引证的完整回答：
+
+![E2E 实测：综合税计算](docs/e2e-tax-calculation.png)
+
+插件页安装状态：
+
+![插件页](docs/plugin-page.png)
+
 ## 安装
 
 ```sh
-# 本地目录
-dsh plugin --profile <你的profile> add /path/to/dsh-fintax
+# 从 npm（推荐）
+dsh plugin --profile <你的profile> add dsh-fintax
 
-# 或从 GitHub（发布后）
+# 从 GitHub
 dsh plugin --profile <你的profile> add github:fleekelon/dsh-fintax
 
-# 或从 npm（发布后）
-dsh plugin --profile <你的profile> add dsh-fintax
+# 本地目录
+dsh plugin --profile <你的profile> add /path/to/dsh-fintax
 ```
 
 桌面端用户也可在插件页通过本地包安装。兼容 DSH >= 0.2.1-rc.2（developer preview 阶段，破坏性变更时请提 issue）。
