@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "title": { "en": "FinTax plugins", "zh": "财税插件" },
+  "plugins": [
+    {
+      "name": "dsh-fintax",
+      "title": { "en": "FinTax Workbench", "zh": "财税工作台" },
+      "description": {
+        "en": "Cited tax policy Q&A via IMA knowledge base, cross-border e-commerce compliance check, and 5 deterministic tax calculators with policy references.",
+        "zh": "基于 IMA 知识库的政策引证问答、跨境电商合规自查、5 场景确定性税额试算（带政策文号引证与临界点预警）。"
+      },
+      "author": "fleekelon",
+      "homepage": "https://github.com/fleekelon/dsh-fintax#readme",
+      "repository": { "url": "https://github.com/fleekelon/dsh-fintax" },
+      "icon": "https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg",
+      "versions": [
+        {
+          "version": "0.2.1",
+          "publishTimestamp": 1794276046,
+          "source": { "type": "npm" },
+          "engines": { "dsh": ">=0.2.1-rc.2 <0.4.0" }
+        }
+      ]
+    }
+  ]
+}
