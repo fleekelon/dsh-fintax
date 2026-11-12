@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![DSH Plugin](https://img.shields.io/badge/DSH-plugin-4fc3f7)](https://github.com/topics/dsh-plugin)
 
-<img src="assets/icon.svg" width="80" alt="dsh-fintax icon">
+<img src="https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg" width="80" alt="dsh-fintax icon">
 
 DeepSeek Harness 插件：把财税专业工作流装进 Agent。
 
@@ -22,11 +22,11 @@ DeepSeek Harness 插件：把财税专业工作流装进 Agent。
 
 真实模型端到端测试：问"1000 元商品走跨境电商零售进口交多少综合税"，Agent 自动检索知识库 → 核对政策原文（gov.cn）→ 调用工具计算 → 输出带引证的完整回答：
 
-![E2E 实测：综合税计算](docs/e2e-tax-calculation.png)
+![E2E 实测：综合税计算](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/e2e-tax-calculation.png)
 
 插件页安装状态：
 
-![插件页](docs/plugin-page.png)
+![插件页](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/plugin-page.png)
 
 ## 安装
 
