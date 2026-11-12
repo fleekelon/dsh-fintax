@@ -45,8 +45,8 @@ window.__ModuleLoader__.load({
         kbSetDefault: '设为默认库',
         kbCurrentBadge: '当前默认',
         kbEmptyHint: '点击上方「测试连接并拉取知识库」即可在此直接点选你的财税知识库。',
-        calcTitle: '3. 内置 7 大确定性算税与差额桥接引擎（免配置离线可用）',
-        calcDesc: '所有金额、临界点与四层口径差额均由确定性代码精算，杜绝大模型心算报错。点击右侧按钮可复制典型提问直接去聊天框实测：',
+        calcTitle: '3. 原始账单离线体检雷达 + 7 大确定性算税引擎（免配置离线可用）',
+        calcDesc: '支持直接拖入 Amazon / TikTok Shop / Stripe 官方原始导出账单（CSV/TSV/XLSX）做精确到分的离线初筛与异常排雷，所有算术均由确定性代码完成：',
         copyPrompt: '复制提问示例',
         copied: '已复制 ✓',
         savedOk: '凭证已安全保存至本机 ~/.config/ima/',
@@ -82,8 +82,8 @@ window.__ModuleLoader__.load({
         kbSetDefault: 'Set as default',
         kbCurrentBadge: 'Default',
         kbEmptyHint: 'Click "Test & load knowledge bases" above to pick from your IMA account.',
-        calcTitle: '3. Seven built-in deterministic calculators (work offline)',
-        calcDesc: 'Every tax figure, cliff threshold, and 4-layer reconciliation bridge is computed deterministically in code.',
+        calcTitle: '3. Raw statement diagnostic parser + 7 deterministic calculators (work offline)',
+        calcDesc: 'Drop raw Amazon / TikTok Shop / Stripe exports (CSV/TSV/XLSX) for exact cent-level local diagnostics and P0/P1 anomaly detection.',
         copyPrompt: 'Copy sample prompt',
         copied: 'Copied ✓',
         savedOk: 'Credentials saved to ~/.config/ima/',
@@ -93,6 +93,14 @@ window.__ModuleLoader__.load({
     }
 
     const SCENARIOS = [
+      {
+        code: 'fintax_parse_statement',
+        zhName: '★ 原始结算账单离线体检与异常雷达',
+        enName: '★ Raw platform statement diagnostic radar',
+        zhDesc: '直接读取本地 Amazon Date Range CSV / Flat File V2、TikTok Shop XLSX/CSV、Stripe 流水 CSV，BigInt 精确到分拆解四层口径并扫描全托管混表、坐支广告、A-to-z 拒付等异常。',
+        enDesc: 'Offline cent-accurate parser for Amazon, TikTok Shop, and Stripe CSV/TSV/XLSX exports with P0/P1 anomaly radar.',
+        prompt: '帮我调用 fintax_parse_statement 解析这份本地账单文件：<在此粘贴你的 Amazon/TikTok/Stripe 账单 CSV 或 XLSX 路径>，并按当月汇率 7.12 做四层口径初筛体检与异常排查。',
+      },
       {
         code: 'platform_tax_reconcile',
         zhName: '平台涉税报送四层口径差额桥接',

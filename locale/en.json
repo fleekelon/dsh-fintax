@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "FinTax workbench",
-    "description": "Cited tax policy Q&A via Tencent IMA knowledge base, GUI settings panel, cross-border compliance checks, and 7 deterministic tax & 4-layer reconciliation calculators."
+    "description": "Offline Amazon/TikTok/Stripe raw statement parser & anomaly radar, cited tax Q&A via Tencent IMA knowledge base, GUI settings, and 7 deterministic tax calculators."
   }
 }

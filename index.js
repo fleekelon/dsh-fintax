@@ -1,6 +1,6 @@
-// dsh-fintax v0.3.0：财税工作台插件入口（Host 半身）。
+// dsh-fintax v0.4.0：财税工作台插件入口（Host 半身）。
 // 纯 ESM、零运行时依赖：
-//   1. 向 ctx.tools 注册 5 个工具（4 个 IMA 知识库只读工具，支持默认优先库自动绑定 + 1 个 7 场景确定性算税与对账引擎）；
+//   1. 向 ctx.tools 注册 6 个工具（4 个 IMA 知识库只读工具 + 1 个原始结算账单离线初筛体检雷达 fintax_parse_statement + 1 个 7 场景确定性算税与对账引擎 fintax_calc）；
 //   2. 向 ctx.skills 注册 4 个随包财税合规技能；
 //   3. 当宿主挂载 webServer 时，提供经会话准入校验的 /api/fintax/* 设置接口（配合 client.js 图形化设置页，绝不回传密钥明文）。
 
@@ -17,7 +17,8 @@ import {
   getPublicStatus,
   CREDENTIALS_HELP,
 } from './lib/ima.js'
-import { calculate } from './lib/calc.js'
+import { calculate, platformTaxReconcile } from './lib/calc.js'
+import { parsePlatformStatement, fmtAmount, toNumber2 } from './lib/statement.js'
 
 const PKG_DIR = dirname(fileURLToPath(import.meta.url))
 
@@ -113,7 +114,7 @@ export function createFintaxApiHandler({ getConnection }) {
 
     try {
       if (subPath === '/status' && method === 'GET') {
-        return send(200, { ok: true, version: '0.3.0', ...getPublicStatus() })
+        return send(200, { ok: true, version: '0.4.0', ...getPublicStatus() })
       }
 
       if (subPath === '/credentials' && method === 'POST') {
@@ -170,7 +171,7 @@ export function createFintaxApiHandler({ getConnection }) {
 }
 
 export function apply(ctx) {
-  console.log('[fintax] 财税工作台 v0.3.0 加载中…')
+  console.log('[fintax] 财税工作台 v0.4.0 加载中…')
 
   // ── 工具 1：列出我的 IMA 知识库 ─────────────────────────────
   ctx.tools.register({
@@ -451,6 +452,125 @@ export function apply(ctx) {
     },
   })
 
+  // ── 工具 6：跨境平台原始结算账单本地初筛体检与异常雷达 ──────────
+  ctx.tools.register({
+    name: 'fintax_parse_statement',
+    description:
+      '本地离线解析跨境电商官方导出的原始结算账单（支持 Amazon Date Range CSV / Flat File V2、TikTok Shop Statements XLSX/CSV、Stripe 独立站余额流水 CSV/XLSX）。采用 BigInt 定点运算精确到分（免装 Python/LibreOffice，原始订单明细不外传），输出四层口径初筛汇总、行内水平守恒校验与 P0/P1/P2 异常交易雷达；可选传入汇率与已申报额直接联动四层口径差额诊断。',
+    parameters: {
+      file_path: {
+        type: 'string',
+        required: true,
+        description: '本机账单文件路径（支持 .csv / .tsv / .txt / .xlsx）。',
+      },
+      platform: {
+        type: 'string',
+        description: 'auto（默认自动识别表头）| amazon | tiktok | stripe',
+      },
+      fx_rate_to_cny: {
+        type: 'number',
+        description: '可选：1 原币折合人民币汇率（如 USD 传 7.12）；原币已为 RMB 时默认按 1.0 处理。传入后自动折算人民币四层口径。',
+      },
+      declared_vat_sales_cny: {
+        type: 'number',
+        description: '可选：企业当期实际已申报增值税/出口销售额（人民币，元）；配合 fx_rate_to_cny 自动执行申报缺口与“回款净额报税”排雷诊断。',
+      },
+    },
+    output: textOutput,
+    async execute(args) {
+      return guarded(async () => {
+        const fp = String(args?.file_path ?? '').trim()
+        if (!fp) throw new Error('file_path（本地账单文件路径）不能为空')
+        const summaries = parsePlatformStatement(fp, args?.platform || 'auto')
+        const blocks = []
+
+        for (const s of summaries) {
+          const ccy = s.currency
+          const p0 = s.anomalies.filter((a) => a.severity.startsWith('P0'))
+          const p1 = s.anomalies.filter((a) => a.severity.startsWith('P1'))
+          const p2 = s.anomalies.filter((a) => a.severity.startsWith('P2'))
+
+          const lines = [
+            `【跨境原始账单四层口径初筛体检报告｜${s.platform} · ${s.site} · ${ccy}】`,
+            `· 文件与格式：${s.fileName} — ${s.formatLabel}`,
+            `· 识别期间：${s.period} | 有效明细行数：${s.rawRowCount} 行`,
+            `── 一、原币四层口径精确拆解（单位：${ccy}，精确到 0.01）──`,
+            `· ① 商品含运费原价总额：${fmtAmount(s.grossSales)}`,
+            `· ② 减：商家承担促销折扣：${fmtAmount(s.sellerDiscount)}`,
+            `· ★ 平台涉税报送参考收入总额（①−②，未扣佣金与退款）：${fmtAmount(s.taxReportingGrossRef)}`,
+            `· ③ 加：平台出资补贴 / 库存赔付：${fmtAmount(s.platformSubsidy)}`,
+            `· ④ 减：客户退款本金：${fmtAmount(s.customerRefund)}`,
+            `· ⑤~⑨ 平台与履约费用合计（主要责任人须单独列支成本费用，严禁直接冲减收入）：${fmtAmount(s.totalFees)}`,
+            `    ├─ 平台佣金及交易手续费：${fmtAmount(s.platformCommission)}`,
+            `    ├─ 联盟达人佣金（Affiliate/TAP）：${fmtAmount(s.affiliateCommission)}`,
+            `    ├─ FBA / 仓储及尾程物流费：${fmtAmount(s.logisticsWarehousing)}`,
+            `    ├─ 站内广告 / 网关直付广告费：${fmtAmount(s.inPlatformAds)}`,
+            `    └─ 支付网关及拒付争议处理费：${fmtAmount(s.gatewayDisputeFee)}`,
+            `· 已自动剥离（商城代扣代缴流转税，不计入收入）：${fmtAmount(s.facilitatorTaxStripped)}`,
+            `· ⑩ 非代扣待卖家自申报流转税净流入（应计其他应付款，勿混入收入）：${fmtAmount(s.selfRemitTaxNet)}`,
+            `· ⑪ 冻结准备金/保证金净变动（+新增冻结 / -释放前期）：${fmtAmount(s.reserveNetChange)}`,
+            `── 二、账单内部勾稽核验 ──`,
+            `· 行内水平守恒校验：差额 ${fmtAmount(s.horizontalDiffTotal)} ${ccy}（${s.horizontalDiffTotal === 0n ? '✔ 全部明细行水平守恒通过' : '❌ 存在行内不守恒阻断项，见下方异常雷达'}）`,
+            `· 理论应放款净额：${fmtAmount(s.theoreticalPayout)} ${ccy} | 账单内提取实际打款（Payout）：${fmtAmount(s.actualPayout)} ${ccy} | 账单内放款差额：${fmtAmount(s.statementPayoutDiff)} ${ccy}`,
+          ]
+
+          if (s.statementPayoutDiff !== 0n && s.horizontalDiffTotal === 0n) {
+            lines.push(
+              `  （注：行内水平守恒已通过；放款差额 ${fmtAmount(s.statementPayoutDiff)} ${ccy} 通常源于自然月截取导致的期初/期末待打款留存余额变动或独立结算周期跨月打款。）`,
+            )
+          }
+          if (s.uncapturedVoidExcluded > 0n) {
+            lines.push(`· 已自动过滤未捕获预授权/取消废单金额：${fmtAmount(s.uncapturedVoidExcluded)} ${ccy}`)
+          }
+
+          // 可选联动：按汇率折算人民币并接入 platformTaxReconcile
+          const rawFx = args?.fx_rate_to_cny ?? (ccy === 'RMB' ? 1 : null)
+          if (rawFx !== null && rawFx !== undefined && String(rawFx).trim() !== '' && summaries.length === 1) {
+            const fx = Number(rawFx)
+            if (Number.isFinite(fx) && fx > 0) {
+              const rec = platformTaxReconcile({
+                reportedGrossRevenue: Math.round(toNumber2(s.taxReportingGrossRef) * fx * 100) / 100,
+                refunds: Math.round(toNumber2(s.customerRefund) * fx * 100) / 100,
+                marketplaceWithheldTax: 0, // taxReportingGrossRef 已按不含代扣税的商品原价减商家折扣口径提取
+                platformFees: Math.round(toNumber2(s.totalFees) * fx * 100) / 100,
+                subsidies: Math.round(toNumber2(s.platformSubsidy) * fx * 100) / 100,
+                reserveChange: Math.round(toNumber2(s.reserveNetChange) * fx * 100) / 100,
+                actualPayout: s.actualPayout > 0n ? Math.round(toNumber2(s.actualPayout) * fx * 100) / 100 : undefined,
+                declaredVatSales: args?.declared_vat_sales_cny,
+              })
+              lines.push(`── 三、人民币折算与申报比对诊断（按汇率 ${fx} 试算）──`)
+              lines.push(...rec.steps.map((st) => `· ${st}`))
+              if (rec.warnings.length) lines.push(...rec.warnings.map((w) => `⚠ ${w}`))
+            }
+          }
+
+          // 异常雷达展示（限制每级展示条数防止大账单撑爆上下文）
+          lines.push(`── 异常交易雷达扫描结果（P0阻断 ${p0.length} 项 | P1高危 ${p1.length} 项 | P2关注 ${p2.length} 项）──`)
+          if (s.anomalies.length === 0) {
+            lines.push('✔ 未检出异常交易记录。')
+          } else {
+            const ordered = [...p0, ...p1, ...p2]
+            for (const a of ordered.slice(0, 18)) {
+              lines.push(`· [${a.severity}] ${a.category}（单号 ${a.refId}，金额 ${a.amount} ${ccy}）：${a.detail}`)
+            }
+            if (ordered.length > 18) {
+              lines.push(`· …其余 ${ordered.length - 18} 条同类异常已折叠汇总。`)
+            }
+          }
+
+          lines.push(
+            '── 合规与关账边界说明 ──',
+            '· 如检出 P0/P1 异常（如全托管混表、网关余额坐支海外广告、非代扣待申报流转税、回款净额漏报），若已配置 IMA 知识库可调用 ima_search 检索对应实操 SOP 与政策原文。',
+            '· 本工具提供单店原始账单初筛体检与异常排雷；企业月末正式关账仍须结合多店铺主体映射、央行基准汇率、第三方收款机构期初期末资金池、海关报关离境跨期台账及标准借贷会计分录完成完整底稿复核。',
+          )
+          blocks.push(lines.join('\n'))
+        }
+
+        return blocks.join('\n\n========================================\n\n')
+      })
+    },
+  })
+
   // ── 随包技能注册 ─────────────────────────────────────────────
   const skillsDir = join(PKG_DIR, 'skills')
   let entries = []
@@ -497,7 +617,7 @@ export function apply(ctx) {
     })
   }
 
-  console.log('[fintax] 财税工作台 v0.3.0 已加载：5 个工具（含 7 大确定性场景）+ 4 个技能')
+  console.log('[fintax] 财税工作台 v0.4.0 已加载：6 个工具（含原始账单离线体检雷达 + 7 大确定性场景）+ 4 个技能')
 }
 
 /** 极简 frontmatter 解析：只取 name / description（单行值），其余交给正文。 */

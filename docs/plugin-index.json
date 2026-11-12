@@ -6,8 +6,8 @@
       "name": "dsh-fintax",
       "title": { "en": "FinTax workbench", "zh": "财税工作台" },
       "description": {
-        "en": "Cited tax policy Q&A via Tencent IMA knowledge base, GUI settings panel, cross-border compliance check, and 7 deterministic tax & 4-layer reconciliation calculators.",
-        "zh": "基于腾讯 IMA 知识库的政策引证问答、图形化配置面板、跨境电商合规自查与 7 场景确定性算税及四层口径差额桥接引擎。"
+        "en": "Offline Amazon/TikTok/Stripe raw statement diagnostic parser, cited tax policy Q&A via Tencent IMA knowledge base, GUI settings, and 7 deterministic tax & reconciliation calculators.",
+        "zh": "支持 Amazon/TikTok/Stripe 原始结算账单离线初筛体检与异常雷达、腾讯 IMA 知识库政策引证问答、图形化配置面板与 7 场景确定性算税及差额桥接引擎。"
       },
       "author": "fleekelon",
       "homepage": "https://github.com/fleekelon/dsh-fintax#readme",
@@ -15,8 +15,8 @@
       "icon": "https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg",
       "versions": [
         {
-          "version": "0.3.0",
-          "publishTimestamp": 1794458600,
+          "version": "0.4.0",
+          "publishTimestamp": 1794460400,
           "source": { "type": "npm" },
           "engines": { "dsh": ">=0.2.1-rc.2 <0.4.0" }
         }

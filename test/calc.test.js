@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import { deflateRawSync } from 'node:zlib'
 import {
   crossBorderImport,
   vat,
@@ -14,6 +15,7 @@ import {
   exportInvoiceBreakeven,
   platformTaxReconcile,
 } from '../lib/calc.js'
+import { parseAmount, fmtAmount, parsePlatformStatement } from '../lib/statement.js'
 
 test('跨境电商综合税：普通商品 13%×70%=9.1%', () => {
   const r = crossBorderImport({ price: 1000 })
@@ -302,7 +304,10 @@ test('工具层与图形化设置接口集成：准入防线、密钥脱敏、�
     })
 
     assert.ok(mountedRoute && mountedRoute.path === '/api/fintax', '应向 webServer 注册 /api/fintax 路由')
-    assert.deepEqual(Object.keys(tools).sort(), ['fintax_calc', 'ima_browse', 'ima_list_kbs', 'ima_read', 'ima_search'])
+    assert.deepEqual(
+      Object.keys(tools).sort(),
+      ['fintax_calc', 'fintax_parse_statement', 'ima_browse', 'ima_list_kbs', 'ima_read', 'ima_search'],
+    )
     assert.deepEqual(Object.keys(skills).sort(), ['fintax-calc', 'fintax-crossborder-check', 'fintax-mode-select', 'fintax-policy-qa'])
 
     // 未绑定默认库时，ima_browse 空参应返回可读错误提示
@@ -415,5 +420,252 @@ test('工具层与图形化设置接口集成：准入防线、密钥脱敏、�
     if (prevKey !== undefined) process.env.IMA_API_KEY = prevKey
     if (prevDefKb !== undefined) process.env.IMA_DEFAULT_KB_ID = prevDefKb
     rmSync(tmpCfg, { recursive: true, force: true })
+  }
+})
+
+// ── v0.4.0 原始结算账单离线解析与异常雷达测试 ────────────────────
+/** 构造最小标准 ZIP/XLSX Buffer 用于零依赖测试多表 XLSX 解析 */
+function buildTestXlsx(namedXmlEntries) {
+  const localParts = []
+  const centralParts = []
+  let offset = 0
+
+  for (const [name, xmlStr] of Object.entries(namedXmlEntries)) {
+    const nameBuf = Buffer.from(name, 'utf8')
+    const rawData = Buffer.from(xmlStr, 'utf8')
+    const compData = deflateRawSync(rawData)
+
+    const localHdr = Buffer.alloc(30)
+    localHdr.writeUInt32LE(0x04034b50, 0)
+    localHdr.writeUInt16LE(20, 4)
+    localHdr.writeUInt16LE(8, 8) // deflate
+    localHdr.writeUInt32LE(compData.length, 18)
+    localHdr.writeUInt32LE(rawData.length, 22)
+    localHdr.writeUInt16LE(nameBuf.length, 26)
+
+    const cdHdr = Buffer.alloc(46)
+    cdHdr.writeUInt32LE(0x02014b50, 0)
+    cdHdr.writeUInt16LE(20, 4)
+    cdHdr.writeUInt16LE(20, 6)
+    cdHdr.writeUInt16LE(8, 10)
+    cdHdr.writeUInt32LE(compData.length, 20)
+    cdHdr.writeUInt32LE(rawData.length, 24)
+    cdHdr.writeUInt16LE(nameBuf.length, 28)
+    cdHdr.writeUInt32LE(offset, 42)
+
+    localParts.push(localHdr, nameBuf, compData)
+    centralParts.push(cdHdr, nameBuf)
+    offset += 30 + nameBuf.length + compData.length
+  }
+
+  const cdBuf = Buffer.concat(centralParts)
+  const count = Object.keys(namedXmlEntries).length
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(count, 8)
+  eocd.writeUInt16LE(count, 10)
+  eocd.writeUInt32LE(cdBuf.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+  return Buffer.concat([...localParts, cdBuf, eocd])
+}
+
+test('BigInt 金额解析精度：兼容美式、欧式千分位、括号负数且零浮点误差', () => {
+  assert.equal(fmtAmount(parseAmount('$1,234.56')), '1234.56')
+  assert.equal(fmtAmount(parseAmount('($45.20)')), '-45.20')
+  assert.equal(fmtAmount(parseAmount('-1.234,56 €')), '-1234.56')
+  assert.equal(fmtAmount(parseAmount('0.1') + parseAmount('0.2')), '0.30')
+})
+
+test('Amazon Date Range CSV：跳过前置说明头、剥离商城代扣税、水平守恒与篡改行 P0 阻断', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'amz-dr-'))
+  try {
+    const csvLines = [
+      '"Includes Amazon Marketplace, Fulfillment by Amazon (FBA), and Amazon Webstore transactions"',
+      '"All amounts in USD, unless specified"',
+      '"Definitions:"',
+      '"Sales tax collected: Includes sales tax collected from buyers"',
+      '""',
+      '"date/time","settlement id","type","order id","sku","description","marketplace","product sales","product sales tax","shipping credits","shipping credits tax","gift wrap credits","giftwrap credits tax","promotional rebates","promotional rebates tax","marketplace withheld tax","selling fees","fba fees","other transaction fees","other","total"',
+      // 正常订单：商品 100 + 运费 10 - 促销 5 + 买方税 8 - 代扣税 8 - 佣金 15 - FBA 20 = 70.00
+      '"Oct 5, 2026","S1","Order","111-001","SKU1","Widget","amazon.com","100.00","8.00","10.00","0.00","0.00","0.00","-5.00","0.00","-8.00","-15.00","-20.00","0.00","0.00","70.00"',
+      // 退款行：退商品 -50 + 退佣金 6 = -44.00
+      '"Oct 8, 2026","S1","Refund","111-002","SKU1","Refund","amazon.com","-50.00","0.00","0.00","0.00","0.00","0.00","0.00","0.00","0.00","6.00","0.00","0.00","0.00","-44.00"',
+      // 广告扣费：-12.00
+      '"Oct 10, 2026","S1","Service Fee","AD-01","","Cost of Advertising","amazon.com","0","0","0","0","0","0","0","0","0","0","0","-12.00","0","-12.00"',
+      // 准备金新增冻结：-4.00 -> Q = +4.00
+      '"Oct 15, 2026","S1","Reserve","RES-1","","Account Level Reserve","amazon.com","0","0","0","0","0","0","0","0","0","0","0","0","-4.00","-4.00"',
+      // 银行打款 Transfer：-10.00 -> R = 10.00（70 - 44 - 12 - 4 = 10.00 完全轧平！）
+      '"Oct 20, 2026","S1","Transfer","TR-1","","To Ending Balance","amazon.com","0","0","0","0","0","0","0","0","0","0","0","0","-10.00","-10.00"',
+    ]
+    const p = join(dir, 'Amazon_US_Oct.csv')
+    writeFileSync(p, csvLines.join('\n'), 'utf8')
+
+    const [s] = parsePlatformStatement(p)
+    assert.equal(s.platform, 'Amazon')
+    assert.equal(s.currency, 'USD')
+    assert.equal(s.period, '2026-10')
+    assert.equal(fmtAmount(s.grossSales), '110.00')
+    assert.equal(fmtAmount(s.sellerDiscount), '5.00')
+    assert.equal(fmtAmount(s.taxReportingGrossRef), '105.00')
+    assert.equal(fmtAmount(s.customerRefund), '50.00')
+    assert.equal(fmtAmount(s.facilitatorTaxStripped), '8.00')
+    assert.equal(fmtAmount(s.platformCommission), '9.00')
+    assert.equal(fmtAmount(s.logisticsWarehousing), '20.00')
+    assert.equal(fmtAmount(s.inPlatformAds), '12.00')
+    assert.equal(fmtAmount(s.reserveNetChange), '4.00')
+    assert.equal(fmtAmount(s.theoreticalPayout), '10.00')
+    assert.equal(fmtAmount(s.actualPayout), '10.00')
+    assert.equal(fmtAmount(s.statementPayoutDiff), '0.00')
+    assert.equal(fmtAmount(s.horizontalDiffTotal), '0.00')
+
+    // 注入一行篡改数据测试 P0 水平不守恒阻断
+    const badFile = join(dir, 'Amazon_Tampered.csv')
+    writeFileSync(
+      badFile,
+      [...csvLines, '"Oct 21, 2026","S1","Order","BAD-999","SKU1","Tampered","amazon.com","100.00","0","0","0","0","0","0","0","0","-10.00","0","0","0","999.00"'].join('\n'),
+      'utf8',
+    )
+    const [badS] = parsePlatformStatement(badFile)
+    assert.ok(badS.anomalies.some((a) => a.severity.startsWith('P0') && a.refId === 'BAD-999'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('TikTok Shop 多工作表 XLSX 零依赖解析：还原平台补贴、达人佣金并拦截全托管混表 P0 异常', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tts-xlsx-'))
+  try {
+    const xlsxBuf = buildTestXlsx({
+      'xl/workbook.xml':
+        '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+        '<sheet name="Order details" sheetId="1" r:id="rId1"/>' +
+        '<sheet name="Statements" sheetId="2" r:id="rId2"/>' +
+        '</sheets></workbook>',
+      'xl/_rels/workbook.xml.rels':
+        '<?xml version="1.0"?><Relationships>' +
+        '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>' +
+        '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/>' +
+        '</Relationships>',
+      'xl/worksheets/sheet1.xml':
+        '<worksheet><sheetData>' +
+        '<row r="1">' +
+        '<c r="A1" t="inlineStr"><is><t>Statement date</t></is></c>' +
+        '<c r="B1" t="inlineStr"><is><t>Type</t></is></c>' +
+        '<c r="C1" t="inlineStr"><is><t>Order ID</t></is></c>' +
+        '<c r="D1" t="inlineStr"><is><t>Shop mode</t></is></c>' +
+        '<c r="E1" t="inlineStr"><is><t>Currency</t></is></c>' +
+        '<c r="F1" t="inlineStr"><is><t>Gross sales</t></is></c>' +
+        '<c r="G1" t="inlineStr"><is><t>Seller discount</t></is></c>' +
+        '<c r="H1" t="inlineStr"><is><t>Platform discount</t></is></c>' +
+        '<c r="I1" t="inlineStr"><is><t>Commission fee</t></is></c>' +
+        '<c r="J1" t="inlineStr"><is><t>Affiliate commission</t></is></c>' +
+        '<c r="K1" t="inlineStr"><is><t>Total settlement amount</t></is></c>' +
+        '</row>' +
+        // POP 订单：200 - 商家折扣 20 + 平台补贴 15 - 佣金 10 - 达人佣金 25 = 160.00
+        '<row r="2">' +
+        '<c r="A2" t="inlineStr"><is><t>2026-10-12</t></is></c>' +
+        '<c r="B2" t="inlineStr"><is><t>Order</t></is></c>' +
+        '<c r="C2" t="inlineStr"><is><t>TT-001</t></is></c>' +
+        '<c r="D2" t="inlineStr"><is><t>POP</t></is></c>' +
+        '<c r="E2" t="inlineStr"><is><t>USD</t></is></c>' +
+        '<c r="F2"><v>200</v></c>' +
+        '<c r="G2"><v>-20</v></c>' +
+        '<c r="H2"><v>15</v></c>' +
+        '<c r="I2"><v>-10</v></c>' +
+        '<c r="J2"><v>-25</v></c>' +
+        '<c r="K2"><v>160</v></c>' +
+        '</row>' +
+        // 混入一笔全托管记录 -> 必须触发 P0 阻断！
+        '<row r="3">' +
+        '<c r="A3" t="inlineStr"><is><t>2026-10-13</t></is></c>' +
+        '<c r="B3" t="inlineStr"><is><t>Order</t></is></c>' +
+        '<c r="C3" t="inlineStr"><is><t>TT-FM-99</t></is></c>' +
+        '<c r="D3" t="inlineStr"><is><t>全托管</t></is></c>' +
+        '<c r="E3" t="inlineStr"><is><t>USD</t></is></c>' +
+        '<c r="F3"><v>50</v></c>' +
+        '<c r="G3"><v>0</v></c>' +
+        '<c r="H3"><v>0</v></c>' +
+        '<c r="I3"><v>0</v></c>' +
+        '<c r="J3"><v>0</v></c>' +
+        '<c r="K3"><v>50</v></c>' +
+        '</row>' +
+        '</sheetData></worksheet>',
+      'xl/worksheets/sheet2.xml':
+        '<worksheet><sheetData>' +
+        '<row r="1">' +
+        '<c r="A1" t="inlineStr"><is><t>Statement ID</t></is></c>' +
+        '<c r="B1" t="inlineStr"><is><t>Reserve held</t></is></c>' +
+        '<c r="C1" t="inlineStr"><is><t>Reserve released</t></is></c>' +
+        '<c r="D1" t="inlineStr"><is><t>Payout amount</t></is></c>' +
+        '</row>' +
+        '<row r="2">' +
+        '<c r="A2" t="inlineStr"><is><t>ST-100</t></is></c>' +
+        '<c r="B2"><v>10</v></c>' +
+        '<c r="C2"><v>0</v></c>' +
+        '<c r="D2"><v>200</v></c>' +
+        '</row>' +
+        '</sheetData></worksheet>',
+    })
+
+    const xlsxPath = join(dir, 'TikTok_US_202610.xlsx')
+    writeFileSync(xlsxPath, xlsxBuf)
+
+    const [s] = parsePlatformStatement(xlsxPath)
+    assert.equal(s.platform, 'TikTok Shop')
+    assert.equal(fmtAmount(s.grossSales), '250.00')
+    assert.equal(fmtAmount(s.sellerDiscount), '20.00')
+    assert.equal(fmtAmount(s.platformSubsidy), '15.00')
+    assert.equal(fmtAmount(s.affiliateCommission), '25.00')
+    assert.equal(fmtAmount(s.reserveNetChange), '10.00')
+    assert.equal(fmtAmount(s.actualPayout), '200.00')
+    assert.equal(fmtAmount(s.statementPayoutDiff), '0.00')
+    assert.ok(s.anomalies.some((a) => a.severity.startsWith('P0') && a.category.includes('全托管')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('Stripe 独立站 CSV + 工具端到端调用：过滤未捕获废单、拦截坐支广告费、分离拒付争议费且不泄露内部母表列名', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stripe-csv-'))
+  try {
+    const csv = [
+      'id,type,created,currency,amount,fee,net,status,captured,description,tax_collected',
+      // 正常成交 1000（含待自申报 VAT 50），手续费 30，净额 970 -> 商品销售额 950
+      'txn_1,charge,2026-10-03,USD,1000.00,30.00,970.00,succeeded,true,Order #101,50.00',
+      // 未捕获预授权废单 -> 自动剔除不入收入
+      'txn_2,charge,2026-10-04,USD,300.00,0.00,300.00,uncaptured,false,Auth only,0.00',
+      // 虚拟卡直付海外广告费 -120 -> 触发 P1 防坐支预警
+      'iss_3,issuing_transaction,2026-10-06,USD,-120.00,0.00,-120.00,succeeded,true,Meta Ads Spend,0.00',
+      // 拒付争议：本金 -100，不可退争议费 15，净额 -115
+      'du_4,dispute,2026-10-08,USD,-100.00,15.00,-115.00,lost,true,Chargeback lost,0.00',
+      // 提现 Payout：970 - 120 - 115 = 735.00
+      'po_5,payout,2026-10-15,USD,-735.00,0.00,-735.00,paid,true,Stripe Payout,0.00',
+    ].join('\n')
+    const p = join(dir, 'Stripe_Oct.csv')
+    writeFileSync(p, csv, 'utf8')
+
+    const { apply } = await import('../index.js')
+    const tools = {}
+    apply({
+      tools: { register: (t) => { tools[t.name] = t } },
+      skills: { register: () => {} },
+    })
+
+    const report = await tools.fintax_parse_statement.execute({
+      file_path: p,
+      fx_rate_to_cny: 7.0,
+      declared_vat_sales_cny: 5000,
+    })
+
+    assert.ok(report.includes('950.00'), '应准确剥离 50 USD 待自申报税后得出 950.00 商品原价')
+    assert.ok(report.includes('防坐支预警'), '应触发虚拟卡直付广告防坐支预警')
+    assert.ok(report.includes('Chargeback/Dispute'), '应识别拒付争议并分离争议费')
+    assert.ok(report.includes('300.00 USD'), '应统计已过滤未捕获废单金额')
+    assert.ok(report.includes('账单内放款差额：0.00 USD'), '理论放款与实际 Payout 应精确轧平为 0.00')
+    // 验证商业护城河红线：不得暴露内部母表坐标或记账凭证字样
+    assert.equal(report.includes('02表'), false, '开源报告不得暴露私域母表列坐标')
+    assert.equal(report.includes('记-01'), false, '开源报告不得暴露私域会计分录模板')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

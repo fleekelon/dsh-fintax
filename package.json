@@ -1,7 +1,7 @@
 {
   "name": "dsh-fintax",
-  "version": "0.3.0",
-  "description": "财税工作台：图形化配置 IMA 知识库引证问答、跨境电商合规自查、7 场景确定性算税与四层口径差额桥接引擎。FinTax workbench for DeepSeek Harness.",
+  "version": "0.4.0",
+  "description": "财税工作台：Amazon/TikTok/Stripe 原始账单离线初筛体检雷达、IMA 知识库引证问答、图形化配置与 7 场景确定性算税及差额桥接引擎。FinTax workbench for DeepSeek Harness.",
   "author": "fleekelon",
   "type": "module",
   "main": "./index.js",
