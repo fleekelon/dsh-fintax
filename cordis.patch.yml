@@ -1,3 +1,4 @@
 - insert:
     - id: fintax
       name: dsh-fintax
+      config: {}

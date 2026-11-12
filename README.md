@@ -1,4 +1,4 @@
-# dsh-fintax — 财税工作台
+# dsh-fintax — 财税工作台 (v0.3.0)
 
 [![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -6,21 +6,23 @@
 
 <img src="https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg" width="80" alt="dsh-fintax icon">
 
-DeepSeek Harness 插件：把财税专业工作流装进 Agent。
+DeepSeek Harness 插件：把专业财税对账、合规自查与代码级确定性算税装进桌面工作台。
 
-- **政策引证问答**：检索你 IMA 知识库里的政策原文与解读，回答附来源，查不到就明说，绝不编造文号。
-- **跨境电商合规自查**：主体备案 / 正面清单 / 三单对碰 / 限值 / 出口退免税 / 收汇 / 申报，逐项输出结构化风险报告。
-- **监管代码与模式选择**：按你的监管代码决策树定位 9610/9710/9810/1210/1039/0110，同步分析退税链路、收结汇、数据报送。
-- **确定性税额试算**（5 场景，算术由代码完成，结果带政策文号引证）：
-  - 跨境电商零售进口综合税（含超限预警）
-  - 增值税价税分离
-  - 年终奖单独计税个税（含"多发一元"临界点陷阱预警）
-  - 外贸企业出口退税免退税（孰低规则、征退税率差转成本、9810 预退税提示）
-  - 综试区零售出口核定征收企业所得税（4% 所得率、小微叠加、9810 口径收紧预警）
+- **桌面端图形化配置页（v0.3 新增）**：装完打开 DSH **「设置 → 财税工作台」** 即可免命令行粘贴腾讯 IMA 凭证、一键测试连接，并点选绑定你的**默认优先财税知识库**（告别多知识库盲翻）。
+- **政策引证问答**：只读检索你 IMA 知识库里的政策原文与底稿，回答附来源标题与真实文号，新旧文件冲突时强制优先现行标准。
+- **7 大代码级确定性算税与差额桥接引擎（免配 IMA 亦可离线使用）**：
+  1. **平台涉税报送四层口径差额桥接（`platform_tax_reconcile`，v0.3 新增）**：拆解平台报送总额 vs 结算实际放款 vs 增值税已申报额，自动轧平资金链并精准排雷「拿回款净额报税、佣金违规冲减收入」；
+  2. **供应商开票加点毛利临界测算（`export_invoice_breakeven`，v0.3 新增）**：精算「加税点拿专票退税」vs「综试区/1039合规无票免税」盈亏临界加点率 $g^*$、净采购成本及企业所得税后综合净利对比；
+  3. **综试区零售出口 4% 核定征收企业所得税（`cbec_assessed_cit`）**：支持小微叠加与 **7,500 万营收（300 万所得额）5 倍税负悬崖**及 9810 核定口径收紧预警；
+  4. **外贸企业出口免退税（`export_rebate`）**：孰低规则、征退税率差转成本、2026 年第 11 号公告第六/七条区分提示；
+  5. **全年一次性奖金单独计税个税（`annual_bonus_iit`）**：含全档位「多发一元到手反少几千」临界陷阱检测；
+  6. **跨境电商零售进口综合税（`cross_border_import`）**：限额内 0 关税 + 70% 折算、消费税组成计税价格与超限预警；
+  7. **增值税价税分离（`vat`）**：含税价与不含税价双向确定性拆分。
+- **跨境电商合规自查 & 监管代码选型**：覆盖 9610 / 9710 / 9810 / 1210 / 1039 / 0110 决策树、收结汇与四方数据一致性自查。
 
 ## 实测效果
 
-真实模型端到端测试：问"1000 元商品走跨境电商零售进口交多少综合税"，Agent 自动检索知识库 → 核对政策原文（gov.cn）→ 调用工具计算 → 输出带引证的完整回答：
+真实模型端到端测试：Agent 自动检索知识库 → 核对政策原文 → 调用确定性引擎计算 → 输出带引证的完整回答：
 
 ![E2E 实测：综合税计算](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/e2e-tax-calculation.png)
 
@@ -31,7 +33,7 @@ DeepSeek Harness 插件：把财税专业工作流装进 Agent。
 ## 安装
 
 ```sh
-# 从 npm（推荐）
+# 从 npm（推荐，预构建免授权）
 dsh plugin --profile <你的profile> add dsh-fintax
 
 # 从 GitHub
@@ -41,47 +43,38 @@ dsh plugin --profile <你的profile> add github:fleekelon/dsh-fintax
 dsh plugin --profile <你的profile> add /path/to/dsh-fintax
 ```
 
-桌面端用户也可在插件页通过本地包安装。兼容 DSH >= 0.2.1-rc.2（developer preview 阶段，破坏性变更时请提 issue）。
+兼容 DSH >= 0.2.1-rc.2。
 
-## 配置 IMA 凭证（可选）
+## 配置 IMA 知识库（可选，支持图形界面一键配置）
 
-知识库四个工具（`ima_list_kbs` / `ima_browse` / `ima_search` / `ima_read`）需要腾讯 IMA OpenAPI 凭证；不配置时它们会给出配置指引，税额试算不受影响。
+7 大算税与差额桥接场景**无需任何凭证即可离线运行**。如需启用腾讯 IMA 知识库政策引证问答：
 
-1. 打开 <https://ima.qq.com/agent-interface> 获取 Client ID 与 API Key；
-2. 二选一：
-   - 写入 `~/.config/ima/client_id` 与 `~/.config/ima/api_key`；
-   - 或设置环境变量 `IMA_CLIENT_ID` / `IMA_API_KEY`。
+1. 打开 <https://ima.qq.com/agent-interface> 获取 `Client ID` 与 `API Key`；
+2. **推荐方式（图形界面）**：在 DSH 桌面端打开 **「设置 → 财税工作台」**，粘贴保存凭证，点击「测试连接并拉取知识库」即可点选绑定你的默认财税知识库；
+3. **CLI / 环境变量方式**：写入 `~/.config/ima/client_id` 与 `~/.config/ima/api_key`（可选 `~/.config/ima/fintax_config.json`），或设置环境变量 `IMA_CLIENT_ID` / `IMA_API_KEY` / `IMA_DEFAULT_KB_ID`。
 
-凭证只作为 HTTP 头发送到官方 `ima.qq.com`，不写日志、不落其他文件。插件对知识库**只读**（列表/搜索/原文信息），不做任何写入。
+安全承诺：设置页接口逐请求执行宿主会话准入校验（`connection.admit`），密钥只写不回传明文，且仅作为请求头发送至官方 `https://ima.qq.com`（严格只读）。
 
-## 工具
+## 工具与技能
 
 | 工具 | 用途 |
 |---|---|
-| `ima_list_kbs` | 列出你的 IMA 知识库 |
-| `ima_browse` | 浏览知识库内容目录（小库直接列全，替代盲搜） |
-| `ima_search` | 在指定知识库内搜索（返回 media_id/标题/摘要） |
-| `ima_read` | 按 media_id 获取原文访问信息 |
-| `fintax_calc` | 确定性试算：`cross_border_import` / `vat` / `annual_bonus_iit` / `export_rebate` / `cbec_assessed_cit` |
-
-## 技能
+| `fintax_calc` | 7 场景确定性试算与对账：`platform_tax_reconcile` / `export_invoice_breakeven` / `cbec_assessed_cit` / `export_rebate` / `annual_bonus_iit` / `cross_border_import` / `vat` |
+| `ima_list_kbs` | 列出你的 IMA 知识库并标识已绑定的默认优先库 |
+| `ima_search` | 在默认或指定知识库内搜索政策原文与底稿 |
+| `ima_browse` | 浏览默认或指定知识库目录及展开子文件夹 |
+| `ima_read` | 按 `media_id` 读取 Markdown / 笔记原文 |
 
 | 技能 | 触发场景 |
 |---|---|
-| `fintax-policy-qa` | 政策问答：引证纪律 + 降级路径 |
-| `fintax-crossborder-check` | 跨境电商合规自查清单 |
-| `fintax-mode-select` | 监管代码/出口模式选择（决策树工作流） |
-| `fintax-calc` | 试算工作流：先核参数、必须走工具 |
-
-## 设计说明
-
-- 纯 ESM JavaScript，零运行时依赖、免构建：直接向 `ctx.tools` / `ctx.skills` 注册，git/npm/tarball 三种分发方式都不需要构建许可。
-- 政策参数（税率、限值、征收比例）全部可由调用方覆盖；默认值只是试算起点，技能工作流强制要求先核对现行政策。
-- 你的专业知识库是护城河：插件提供工作流与引证纪律，领域内容由你自己的 IMA 知识库供给（每个用户接自己的库）。
+| `fintax-calc` | 税额试算与四层口径差额桥接工作流 |
+| `fintax-policy-qa` | 政策引证问答（新旧文件优先级 + 降级路径） |
+| `fintax-crossborder-check` | 跨境电商全链路合规自查报告（对齐 2026 现行法规） |
+| `fintax-mode-select` | 海关监管代码与出口模式决策树 |
 
 ## 免责声明
 
-本插件输出为研究辅助与算术试算，不构成税务申报依据或鉴证意见。重大决策请咨询执业税务师/律师并以主管税务机关口径为准。
+本插件输出为财税对账、测算与研究辅助，不构成税务申报依据或鉴证意见。重大事项请结合原始单证咨询执业税务师/律师并以主管税务机关口径为准。
 
 ## License
 

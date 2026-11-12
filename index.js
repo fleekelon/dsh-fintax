@@ -1,11 +1,22 @@
-// dsh-fintax：财税工作台插件入口。
-// 纯 ESM、零运行时依赖：直接向 ctx.tools / ctx.skills 注册对象，
-// 不导入任何 @deepseek-ai 包，宿主版本兼容性风险最小。
+// dsh-fintax v0.3.0：财税工作台插件入口（Host 半身）。
+// 纯 ESM、零运行时依赖：
+//   1. 向 ctx.tools 注册 5 个工具（4 个 IMA 知识库只读工具，支持默认优先库自动绑定 + 1 个 7 场景确定性算税与对账引擎）；
+//   2. 向 ctx.skills 注册 4 个随包财税合规技能；
+//   3. 当宿主挂载 webServer 时，提供经会话准入校验的 /api/fintax/* 设置接口（配合 client.js 图形化设置页，绝不回传密钥明文）。
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { imaCall, loadCredentials, CREDENTIALS_HELP } from './lib/ima.js'
+import {
+  imaCall,
+  loadCredentials,
+  loadFintaxSettings,
+  saveCredentials,
+  clearCredentials,
+  saveFintaxSettings,
+  getPublicStatus,
+  CREDENTIALS_HELP,
+} from './lib/ima.js'
 import { calculate } from './lib/calc.js'
 
 const PKG_DIR = dirname(fileURLToPath(import.meta.url))
@@ -27,13 +38,145 @@ async function guarded(fn) {
   }
 }
 
+/**
+ * 宿主连接准入校验（对齐 DSH connection 服务，防止未授权访问或跨站伪造）：
+ * - DSH >= 0.1.7 提供 connection.admit(req) -> { rejection?: number }
+ * - 旧版提供 connection.requestRejection(req) -> number | undefined
+ * - 若 connection 服务缺失或异常，默认按 503 拒绝（fail-closed）。
+ */
+export function admitRequest(req, connection) {
+  if (!connection) return 503
+  try {
+    if (typeof connection.admit === 'function') {
+      const res = connection.admit(req)
+      return res && typeof res === 'object' ? res.rejection : undefined
+    }
+    if (typeof connection.requestRejection === 'function') {
+      return connection.requestRejection(req)
+    }
+    return 503
+  } catch {
+    return 503
+  }
+}
+
+/** 读取小体积 JSON 请求体（上限 32 KiB）。 */
+function readJsonBody(req, maxBytes = 32_768) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let total = 0
+    req.on('data', (chunk) => {
+      total += chunk.length
+      if (total > maxBytes) {
+        reject(new Error('请求体过大'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8').trim()
+        resolve(raw ? JSON.parse(raw) : {})
+      } catch {
+        reject(new Error('请求体不是合法的 JSON'))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+/** 创建设置页后端路由处理器（导出以便单元测试直接验证准入与脱敏逻辑）。 */
+export function createFintaxApiHandler({ getConnection }) {
+  return async function handleFintaxApi(req, res) {
+    const send = (status, payload) => {
+      const body = JSON.stringify(payload)
+      res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      })
+      res.end(body)
+    }
+
+    const rejection = admitRequest(req, typeof getConnection === 'function' ? getConnection() : undefined)
+    if (rejection !== undefined) {
+      return send(rejection, {
+        error: rejection === 401 ? '未登录或会话无效' : rejection === 503 ? '宿主连接准入服务未就绪' : '拒绝访问',
+      })
+    }
+
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    const marker = '/api/fintax'
+    const idx = url.pathname.indexOf(marker)
+    const subPath = (idx >= 0 ? url.pathname.slice(idx + marker.length) : url.pathname).replace(/\/+$/, '') || '/'
+    const method = String(req.method ?? 'GET').toUpperCase()
+
+    try {
+      if (subPath === '/status' && method === 'GET') {
+        return send(200, { ok: true, version: '0.3.0', ...getPublicStatus() })
+      }
+
+      if (subPath === '/credentials' && method === 'POST') {
+        const body = await readJsonBody(req)
+        const cid = typeof body?.clientId === 'string' ? body.clientId.trim() : ''
+        const key = typeof body?.apiKey === 'string' ? body.apiKey.trim() : ''
+        if (!cid && !key) {
+          return send(400, { error: '请至少填写 Client ID 或 API Key 后再保存' })
+        }
+        saveCredentials({ clientId: cid, apiKey: key })
+        return send(200, { ok: true, ...getPublicStatus() })
+      }
+
+      if (subPath === '/credentials' && method === 'DELETE') {
+        clearCredentials()
+        return send(200, { ok: true, ...getPublicStatus() })
+      }
+
+      if (subPath === '/settings' && method === 'POST') {
+        const body = await readJsonBody(req)
+        saveFintaxSettings({
+          defaultKbId: body?.defaultKbId ?? '',
+          defaultKbName: body?.defaultKbName ?? '',
+        })
+        return send(200, { ok: true, ...getPublicStatus() })
+      }
+
+      if (subPath === '/kbs' && method === 'GET') {
+        if (!loadCredentials()) {
+          return send(400, { error: '尚未配置完整的 IMA Client ID 与 API Key，请先在上方保存凭证' })
+        }
+        const data = await imaCall('openapi/wiki/v1/search_knowledge_base', {
+          query: url.searchParams.get('query') ?? '',
+          cursor: '',
+          limit: 50,
+        })
+        const list = data.info_list ?? data.knowledge_base_list ?? data.list ?? []
+        const kbs = Array.isArray(list)
+          ? list.map((kb) => ({
+              id: String(kb.kb_id ?? kb.id ?? ''),
+              name: String(kb.kb_name ?? kb.name ?? '未命名知识库'),
+              count: kb.content_count != null ? String(kb.content_count) : '',
+              description: String(kb.description ?? ''),
+            }))
+          : []
+        return send(200, { ok: true, kbs })
+      }
+
+      return send(404, { error: `未知接口：${method} ${subPath}` })
+    } catch (err) {
+      return send(500, { error: err?.message || '内部错误' })
+    }
+  }
+}
+
 export function apply(ctx) {
-  console.log('[fintax] 财税工作台加载中…')
+  console.log('[fintax] 财税工作台 v0.3.0 加载中…')
+
   // ── 工具 1：列出我的 IMA 知识库 ─────────────────────────────
   ctx.tools.register({
     name: 'ima_list_kbs',
     description:
-      '列出当前用户配置的 IMA 知识库（id、名称、描述）。财税政策问答前先用它确定要在哪个知识库检索。需要本机已配置 IMA 凭证。',
+      '列出当前用户配置的 IMA 知识库（id、名称、条数、是否已设为默认优先库）。若用户已在「设置 → 财税工作台」绑定默认知识库，可直接调用 ima_search / ima_browse 而无需每次先调本工具。',
     parameters: {
       query: { type: 'string', description: '按名称过滤知识库；留空返回全部。' },
     },
@@ -41,10 +184,11 @@ export function apply(ctx) {
     async execute(args) {
       return guarded(async () => {
         if (!loadCredentials()) return CREDENTIALS_HELP
+        const pref = loadFintaxSettings()
         const data = await imaCall('openapi/wiki/v1/search_knowledge_base', {
           query: args?.query ?? '',
           cursor: '',
-          limit: 20,
+          limit: 30,
         })
         const list = data.info_list ?? data.knowledge_base_list ?? data.list ?? []
         if (!Array.isArray(list) || list.length === 0) {
@@ -52,30 +196,42 @@ export function apply(ctx) {
         }
         const lines = list.map((kb) => {
           const id = kb.kb_id ?? kb.id
-          const name = kb.kb_name ?? kb.name
+          const kbName = kb.kb_name ?? kb.name
+          const isDefault = pref.defaultKbId && id === pref.defaultKbId
           const extra = [kb.content_count ? `${kb.content_count} 条内容` : '', kb.base_type ?? ''].filter(Boolean).join('，')
-          return `- id: ${id} | 名称: ${name}${extra ? ` | ${extra}` : ''}${kb.description ? ` | 描述: ${kb.description}` : ''}`
+          return `${isDefault ? '★ [默认优先库] ' : '- '}id: ${id} | 名称: ${kbName}${extra ? ` | ${extra}` : ''}${kb.description ? ` | 描述: ${kb.description}` : ''}`
         })
-        return `找到 ${list.length} 个知识库：\n${lines.join('\n')}${data.is_end === false ? `\n（还有更多，next_cursor: ${data.next_cursor}）` : ''}`
+        const defaultBanner = pref.defaultKbId
+          ? `当前已绑定默认优先财税知识库：${pref.defaultKbName || pref.defaultKbId} (${pref.defaultKbId})；后续调用 ima_search / ima_browse 可省略 knowledge_base_id。\n`
+          : ''
+        return `${defaultBanner}找到 ${list.length} 个知识库：\n${lines.join('\n')}${data.is_end === false ? `\n（还有更多，next_cursor: ${data.next_cursor}）` : ''}`
       })
     },
   })
 
-  // ── 工具 2：在指定知识库内搜索 ──────────────────────────────
+  // ── 工具 2：在指定（或默认）知识库内搜索 ────────────────────
   ctx.tools.register({
     name: 'ima_search',
     description:
-      '在指定 IMA 知识库内搜索知识条目，返回 media_id、标题和命中摘要。用于财税政策问答时检索用户积累的政策原文与解读。需要本机已配置 IMA 凭证。',
+      '在 IMA 知识库内搜索政策原文与底稿条目，返回 media_id、标题和命中摘要。若用户已在设置页绑定默认知识库，knowledge_base_id 可省略。',
     parameters: {
-      query: { type: 'string', required: true, description: '搜索关键词。IMA 搜索对多词组合敏感：优先用短单一关键词（如“跨境”“退运”），空结果时换词重试，不要一次堆多个词。' },
-      knowledge_base_id: { type: 'string', required: true, description: '知识库 ID（先用 ima_list_kbs 获取）。' },
+      query: {
+        type: 'string',
+        required: true,
+        description: '搜索关键词。IMA 搜索对多词组合敏感：优先用短单一关键词（如“报送”“退运”“9810”），空结果时换词重试。',
+      },
+      knowledge_base_id: {
+        type: 'string',
+        description: '知识库 ID；若已在「设置 → 财税工作台」绑定默认知识库可留空，否则先用 ima_list_kbs 获取。',
+      },
       cursor: { type: 'string', description: '分页游标，首次留空。' },
     },
     output: textOutput,
     async execute(args) {
       return guarded(async () => {
-        if (!args?.knowledge_base_id || !String(args.knowledge_base_id).trim()) {
-          throw new Error('knowledge_base_id 不能为空（请先调用 ima_list_kbs 获取知识库 ID）')
+        const kbId = String(args?.knowledge_base_id || loadFintaxSettings().defaultKbId || '').trim()
+        if (!kbId) {
+          throw new Error('未指定 knowledge_base_id 且尚未绑定默认知识库（请先调用 ima_list_kbs 获取 ID，或在「设置 → 财税工作台」绑定默认库）')
         }
         if (!args?.query || !String(args.query).trim()) {
           throw new Error('query（搜索关键词）不能为空；若想直接浏览目录请改用 ima_browse')
@@ -83,12 +239,12 @@ export function apply(ctx) {
         if (!loadCredentials()) return CREDENTIALS_HELP
         const data = await imaCall('openapi/wiki/v1/search_knowledge', {
           query: String(args.query).trim(),
-          knowledge_base_id: String(args.knowledge_base_id).trim(),
+          knowledge_base_id: kbId,
           cursor: args.cursor ?? '',
         })
         const list = data.info_list ?? []
         if (!Array.isArray(list) || list.length === 0) {
-          return `知识库 ${args.knowledge_base_id} 中未搜到「${args.query}」。可换关键词重试，或如实告知用户知识库暂无该资料。`
+          return `知识库 ${kbId} 中未搜到「${args.query}」。可换更短的同义词重试，或用 ima_browse 浏览目录。`
         }
         const items = list.map((it) => {
           const isFolder = it.media_type === 99 || String(it.media_id ?? '').startsWith('folder_')
@@ -101,37 +257,41 @@ export function apply(ctx) {
           }
         })
         return [
-          `命中 ${items.length} 条（query: ${args.query}）：`,
+          `[库 ${kbId}] 命中 ${items.length} 条（query: ${args.query}）：`,
           JSON.stringify(items, null, 2),
           data.is_end === false ? `还有更多结果，next_cursor: ${data.next_cursor}` : '已到末尾。',
-          '若命中文件夹（kind 为 folder），请将 media_id 作为 folder_id 传给 ima_browse 展开目录；文件条目引用前请用 ima_read 获取原文，核对标题与内容并在回答中注明来源标题。',
+          '若命中文件夹（kind 为 folder），请将 media_id 作为 folder_id 传给 ima_browse 展开；引用文档前请用 ima_read 读取原文并核对文号。',
         ].join('\n')
       })
     },
   })
 
-  // ── 工具 3：浏览知识库内容列表 ─────────────────────────────
+  // ── 工具 3：浏览知识库内容目录 ─────────────────────────────
   ctx.tools.register({
     name: 'ima_browse',
     description:
-      '浏览指定 IMA 知识库的内容列表（标题+media_id，分页）。小库（几十条以内）优先直接浏览全目录再挑目标，比反复猜关键词搜索更快更省；遇到文件夹可将 media_id 作为 folder_id 传入继续展开，找到文档后用 ima_read 取原文。需要本机已配置 IMA 凭证。',
+      '浏览 IMA 知识库的内容目录（标题 + media_id，支持传入 folder_id 展开子文件夹）。若用户已绑定默认知识库，knowledge_base_id 可省略。',
     parameters: {
-      knowledge_base_id: { type: 'string', required: true, description: '知识库 ID（先用 ima_list_kbs 获取）。' },
+      knowledge_base_id: {
+        type: 'string',
+        description: '知识库 ID；若已在「设置 → 财税工作台」绑定默认知识库可留空，否则先用 ima_list_kbs 获取。',
+      },
       cursor: { type: 'string', description: '分页游标，首次留空。' },
-      folder_id: { type: 'string', description: '可选，浏览指定文件夹（传入文件夹的 media_id）；留空浏览根目录。' },
+      folder_id: { type: 'string', description: '可选，浏览指定文件夹（传入 folder_ 开头的 media_id）；留空浏览根目录。' },
     },
     output: textOutput,
     async execute(args) {
       return guarded(async () => {
-        if (!args?.knowledge_base_id || !String(args.knowledge_base_id).trim()) {
-          throw new Error('knowledge_base_id 不能为空（请先调用 ima_list_kbs 获取知识库 ID）')
+        const kbId = String(args?.knowledge_base_id || loadFintaxSettings().defaultKbId || '').trim()
+        if (!kbId) {
+          throw new Error('未指定 knowledge_base_id 且尚未绑定默认知识库（请先调用 ima_list_kbs 获取 ID，或在「设置 → 财税工作台」绑定默认库）')
         }
         if (!loadCredentials()) return CREDENTIALS_HELP
-        const body = { knowledge_base_id: String(args.knowledge_base_id).trim(), cursor: args.cursor ?? '', limit: 50 }
-        if (args.folder_id) body.folder_id = String(args.folder_id).trim()
+        const body = { knowledge_base_id: kbId, cursor: args?.cursor ?? '', limit: 50 }
+        if (args?.folder_id) body.folder_id = String(args.folder_id).trim()
         const data = await imaCall('openapi/wiki/v1/get_knowledge_list', body)
         const list = data.knowledge_list ?? data.info_list ?? []
-        if (!Array.isArray(list) || list.length === 0) return `知识库 ${args.knowledge_base_id} 该目录下暂无内容。`
+        if (!Array.isArray(list) || list.length === 0) return `知识库 ${kbId} 该目录下暂无内容。`
         const lines = list.map((it) => {
           const isFolder = it.media_type === 99 || String(it.media_id ?? '').startsWith('folder_')
           const tag = isFolder
@@ -140,7 +300,7 @@ export function apply(ctx) {
           return `- ${it.title} | media_id: ${it.media_id} | ${tag}`
         })
         return [
-          `共列出 ${lines.length} 条：`,
+          `[库 ${kbId}] 共列出 ${lines.length} 条：`,
           ...lines,
           data.is_end === false ? `（还有更多，next_cursor: ${data.next_cursor}）` : '（已到末尾）',
         ].join('\n')
@@ -148,11 +308,11 @@ export function apply(ctx) {
     },
   })
 
-  // ── 工具 4：获取知识条目原文信息 ────────────────────────────
+  // ── 工具 4：读取知识条目原文 ────────────────────────────────
   ctx.tools.register({
     name: 'ima_read',
     description:
-      '按 media_id 读取 IMA 知识条目原文（Markdown/纯文本/笔记会直接返回正文内容，网页返回访问 URL）。注意：folder_ 开头的文件夹请用 ima_browse 展开，勿传给本工具。需要本机已配置 IMA 凭证。',
+      '按 media_id 读取 IMA 知识条目原文（Markdown/纯文本/笔记直接返回正文内容，网页返回访问 URL）。folder_ 开头的文件夹请用 ima_browse 展开。',
     parameters: {
       media_id: { type: 'string', required: true, description: '知识条目 media_id（来自 ima_browse 或 ima_search 结果中的非文件夹条目）。' },
     },
@@ -164,7 +324,7 @@ export function apply(ctx) {
           throw new Error('media_id 不能为空（请先从 ima_browse 或 ima_search 结果中获取）')
         }
         if (mediaId.startsWith('folder_')) {
-          return `media_id "${mediaId}" 是文件夹，不能用 ima_read 读取。请调用 ima_browse 并传入 folder_id="${mediaId}"（同时传 knowledge_base_id）展开查看该文件夹内的文档。`
+          return `media_id "${mediaId}" 是文件夹，不能用 ima_read 读取。请调用 ima_browse 并传入 folder_id="${mediaId}" 展开查看该文件夹内的文档。`
         }
         if (!loadCredentials()) return CREDENTIALS_HELP
         const data = await imaCall('openapi/wiki/v1/get_media_info', { media_id: mediaId })
@@ -172,7 +332,6 @@ export function apply(ctx) {
           return `media_id "${mediaId}" 是文件夹（media_type=99），请调用 ima_browse 并传入 folder_id="${mediaId}" 展开查看内部文档。`
         }
 
-        // 1) IMA 笔记类型（media_type=11）：直接调 get_doc_content 拉取纯文本正文
         if (data.media_type === 11 && data.notebook_ext_info?.notebook_id) {
           try {
             const noteData = await imaCall('openapi/note/v1/get_doc_content', {
@@ -189,11 +348,10 @@ export function apply(ctx) {
               ].filter(Boolean).join('\n')
             }
           } catch {
-            // 笔记接口无权限或失败时回退展示原始 media_info
+            // 失败时回退展示原始 media_info
           }
         }
 
-        // 2) Markdown / 纯文本（media_type=7 或 13）：直接携带签名 headers 拉取正文返回，省去二次抓取
         if ((data.media_type === 7 || data.media_type === 13) && data.url_info?.url) {
           try {
             const res = await fetch(data.url_info.url, {
@@ -210,16 +368,15 @@ export function apply(ctx) {
               ].filter(Boolean).join('\n')
             }
           } catch {
-            // 直拉失败时回退展示 url_info
+            // 直拉失败回退展示 url_info
           }
         }
 
-        // 3) 二进制 Office/PDF 文件（media_type=1/3/4/5）：提醒勿用网页抓取工具硬抓二进制乱码
         if ([1, 3, 4, 5].includes(data.media_type)) {
           return [
             `media_id: ${mediaId} 的文件信息（media_type=${data.media_type}，二进制文档）：`,
             JSON.stringify(data, null, 2).slice(0, 4000),
-            '注意：该条目为 PDF/Word/PPT/Excel 二进制文件，请勿直接用网页抓取工具读取 URL（会产生二进制乱码撑爆上下文）；请优先读取同目录下的 Markdown (.md) 指南文档，或将该下载信息告知用户。',
+            '注意：该条目为 PDF/Word/PPT/Excel 二进制文件，请勿直接用网页抓取工具读取 URL（会产生二进制乱码撑爆上下文）；请优先读取同目录下的 Markdown (.md) 指南文档，或将该文件说明告知用户。',
           ].join('\n')
         }
 
@@ -232,22 +389,36 @@ export function apply(ctx) {
     },
   })
 
-  // ── 工具 5：确定性税额试算 ──────────────────────────────────
+  // ── 工具 5：7 场景确定性税额与差额对账引擎 ──────────────────
   ctx.tools.register({
     name: 'fintax_calc',
     description:
-      '确定性税额试算（不依赖 LLM 算术），5 个场景：cross_border_import 跨境电商零售进口综合税（限额内70%口径+超限预警）；vat 增值税价税分离；annual_bonus_iit 年终奖单独计税个税（含临界点陷阱预警）；export_rebate 外贸企业出口退税免退税（孰低规则+征退税率差转成本）；cbec_assessed_cit 综试区零售出口核定征收企业所得税（4%所得率+小微叠加+9810口径预警）。政策参数可显式覆盖；先用知识库/权威来源核对现行参数。结果附政策文号引证，仅为试算不构成申报依据。',
+      '确定性财税试算与对账引擎（免配 IMA 亦可离线运行，严禁 LLM 心算替代），支持 7 大场景：' +
+      'platform_tax_reconcile 平台涉税报送 vs 结算放款 vs 纳税申报四层口径差额桥接核对（含净额法误报佣金冲收入自动排雷）；' +
+      'export_invoice_breakeven 供应商开票加点「拿专票退税 vs 合规无票免税」毛利临界点与所得税联动测算；' +
+      'export_rebate 外贸企业出口免退税（孰低规则+征退税率差转成本）；' +
+      'cbec_assessed_cit 综试区零售出口4%核定征收企业所得税（含300万/7500万小微悬崖预警）；' +
+      'annual_bonus_iit 年终奖单独计税个税（含多发一元临界点陷阱检测）；' +
+      'cross_border_import 跨境电商零售进口综合税（限额内70%口径+超限预警）；' +
+      'vat 增值税价税分离。',
     parameters: {
       scenario: {
         type: 'string',
         required: true,
-        description: 'cross_border_import | vat | annual_bonus_iit | export_rebate | cbec_assessed_cit',
+        description:
+          'platform_tax_reconcile | export_invoice_breakeven | export_rebate | cbec_assessed_cit | annual_bonus_iit | cross_border_import | vat',
       },
       params: {
         type: 'object',
         required: true,
         description:
-          'cross_border_import: {price, vatRate=0.13, consumptionTaxRate=0, discount=0.7, singleLimit=5000, annualLimit=26000, annualUsed=0}；vat: {amount, rate=0.13, inclusive=true}；annual_bonus_iit: {bonus}；export_rebate: {purchaseAmount 专票不含税金额, vatRate=0.13 发票税率, rebateRate 缺省=vatRate 须按商品代码核对}；cbec_assessed_cit: {revenue, taxableIncomeRate=0.04, citRate=0.25, smallLowProfit=false}。税率均传 0~1 小数。',
+          'platform_tax_reconcile: {reportedGrossRevenue, refunds=0, marketplaceWithheldTax=0, cutoffAndFxDiff=0, platformFees=0, subsidies=0, reserveChange=0, actualPayout?, declaredVatSales?, principalRole="principal"}；' +
+          'export_invoice_breakeven: {barePurchaseAmount, supplierMarkupRate, vatRate=0.13, rebateRate=vatRate, exportRevenue?, otherDeductibleExpenses=0, invoicedCitRate=0.05, noInvoiceRevenueCitRate=0.002}；' +
+          'export_rebate: {purchaseAmount, vatRate=0.13, rebateRate=vatRate}；' +
+          'cbec_assessed_cit: {revenue, taxableIncomeRate=0.04, citRate=0.25, smallLowProfit=false}；' +
+          'annual_bonus_iit: {bonus}；' +
+          'cross_border_import: {price, vatRate=0.13, consumptionTaxRate=0, discount=0.7, singleLimit=5000, annualLimit=26000, annualUsed=0}；' +
+          'vat: {amount, rate=0.13, inclusive=true}。比例/税率均传 0~1 小数。',
       },
     },
     output: textOutput,
@@ -255,34 +426,38 @@ export function apply(ctx) {
       return guarded(async () => {
         const rawParams = args?.params && typeof args.params === 'object' ? args.params : (args ?? {})
         const r = calculate(args?.scenario, rawParams)
-        const amount = r.taxPayable ?? r.taxAmount ?? r.taxRefund
-        const effRate = r.effectiveRate ?? r.effectiveRateOnRevenue
-        const overLimitNote = r.withinLimit === false ? '（注意：本单已超限，不适用限额内优惠口径，此数字仅作限额内算术对照）' : ''
-        const lines = [
-          `【${r.scenario}】`,
-          ...r.steps.map((s) => `· ${s}`),
-          `结果：${r.taxRefund != null ? '应退税额' : '应纳税额'} ${amount} 元${effRate ? `（实际税负率 ${effRate}）` : ''}${r.afterTax != null ? `，税后 ${r.afterTax} 元` : ''}${overLimitNote}`,
-        ]
+        const lines = [`【${r.scenario}】`, ...r.steps.map((s) => `· ${s}`)]
+
+        if (r.summaryLine) {
+          lines.push(`核心结论：${r.summaryLine}`)
+        } else {
+          const amount = r.taxPayable ?? r.taxAmount ?? r.taxRefund
+          const effRate = r.effectiveRate ?? r.effectiveRateOnRevenue
+          const overLimitNote = r.withinLimit === false ? '（注意：本单已超限，不适用限额内优惠口径，此数字仅作限额内算术对照）' : ''
+          lines.push(
+            `结果：${r.taxRefund != null ? '应退税额' : '应纳税额'} ${amount} 元${effRate ? `（实际税负率 ${effRate}）` : ''}${r.afterTax != null ? `，税后 ${r.afterTax} 元` : ''}${overLimitNote}`,
+          )
+        }
+
         if (r.withinLimit === false) lines.push('⚠ 超限：见下方警告。')
         if (r.warnings?.length) lines.push(...r.warnings.map((w) => `⚠ ${w}`))
         if (r.policyRefs?.length) {
           lines.push('政策依据（引用前请核对现行有效性）：')
           lines.push(...r.policyRefs.map((p) => `· ${p.ref}：${p.note}`))
         }
-        lines.push('声明：本结果基于传入参数与默认政策口径的算术试算，政策参数须经权威来源核对；正式申报以主管税务机关口径为准。')
+        lines.push('声明：本结果基于传入参数与默认政策口径的确定性算术试算，政策参数须经权威来源核对；正式申报以主管税务机关口径为准。')
         return lines.join('\n')
       })
     },
   })
 
-  // ── 随包技能：skills/*/SKILL.md → ctx.skills.register ───────
+  // ── 随包技能注册 ─────────────────────────────────────────────
   const skillsDir = join(PKG_DIR, 'skills')
   let entries = []
   try {
     entries = readdirSync(skillsDir)
   } catch {
     ctx.logger?.warn?.('[fintax] skills 目录缺失，跳过技能注册')
-    return
   }
   for (const entry of entries) {
     const dir = join(skillsDir, entry)
@@ -307,7 +482,22 @@ export function apply(ctx) {
       ctx.logger?.warn?.(`[fintax] 注册技能 ${entry} 失败：${err.message}`)
     }
   }
-  console.log('[fintax] 财税工作台已加载：5 个工具 + 随包技能')
+
+  // ── 桌面端图形化设置接口（仅当宿主存在 webServer 时挂载，CLI 模式自动优雅跳过） ──
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['webServer'], (scoped) => {
+      const apiHandler = createFintaxApiHandler({
+        getConnection: () => scoped.get?.('connection') ?? ctx.get?.('connection'),
+      })
+      scoped.effect(
+        () => scoped.webServer.register({ kind: 'prefix', path: '/api/fintax', handler: apiHandler }),
+        'fintax: settings api routes',
+      )
+      ctx.logger?.info?.('[fintax] 设置页接口已挂载于 /api/fintax')
+    })
+  }
+
+  console.log('[fintax] 财税工作台 v0.3.0 已加载：5 个工具（含 7 大确定性场景）+ 4 个技能')
 }
 
 /** 极简 frontmatter 解析：只取 name / description（单行值），其余交给正文。 */

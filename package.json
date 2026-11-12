@@ -1,19 +1,21 @@
 {
   "name": "dsh-fintax",
-  "version": "0.2.3",
-  "description": "财税工作台：基于 IMA 知识库的政策引证问答、跨境电商合规自查、税额试算。FinTax workbench for DeepSeek Harness.",
+  "version": "0.3.0",
+  "description": "财税工作台：图形化配置 IMA 知识库引证问答、跨境电商合规自查、7 场景确定性算税与四层口径差额桥接引擎。FinTax workbench for DeepSeek Harness.",
   "author": "fleekelon",
   "type": "module",
   "main": "./index.js",
   "icon": "./icon.svg",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
+    "client.js",
     "cordis.patch.yml",
     "icon.svg",
     "locale",
@@ -26,6 +28,7 @@
     "fintax",
     "财税",
     "跨境电商",
+    "出口退税",
     "合规",
     "ima"
   ],
@@ -44,6 +47,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
     }
   },
   "engines": {
