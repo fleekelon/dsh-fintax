@@ -662,9 +662,92 @@ test('Stripe 独立站 CSV + 工具端到端调用：过滤未捕获废单、拦
     assert.ok(report.includes('Chargeback/Dispute'), '应识别拒付争议并分离争议费')
     assert.ok(report.includes('300.00 USD'), '应统计已过滤未捕获废单金额')
     assert.ok(report.includes('账单内放款差额：0.00 USD'), '理论放款与实际 Payout 应精确轧平为 0.00')
+    assert.equal(report.includes('未轧平'), false, '独立站待自申报流转税联动四层桥接时应精确轧平为 0，不得误报资金链未轧平')
     // 验证商业护城河红线：不得暴露内部母表坐标或记账凭证字样
     assert.equal(report.includes('02表'), false, '开源报告不得暴露私域母表列坐标')
     assert.equal(report.includes('记-01'), false, '开源报告不得暴露私域会计分录模板')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v0.4.1 回归：platformTaxReconcile 计入待自申报流转税 + Stripe 失败提现与退款税额符号 + XLSX 注音标签剔除', async () => {
+  // 1) platformTaxReconcile 直接传 selfRemitTaxNet 精确轧平
+  const rec = platformTaxReconcile({
+    reportedGrossRevenue: 135280,
+    refunds: 3560,
+    platformFees: 24314.8,
+    selfRemitTaxNet: 7120,
+    actualPayout: 114525.2,
+  })
+  assert.equal(rec.payoutReconciliation.theoreticalPayout, 114525.2)
+  assert.equal(rec.payoutReconciliation.unexplainedCashGap, 0)
+  assert.equal(rec.warnings.some((w) => w.includes('未轧平')), false)
+
+  // 2) /api/fintax/status 返回 version 与 package.json 一致
+  const { apply, createFintaxApiHandler } = await import('../index.js')
+  const pkgVer = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+  const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+  const req = Readable.from([])
+  req.method = 'GET'
+  req.url = '/api/fintax/status'
+  let statusBody = ''
+  await okHandler(req, { writeHead() {}, end(b) { statusBody = b } })
+  assert.equal(JSON.parse(statusBody).version, pkgVer)
+
+  const dir = mkdtempSync(join(tmpdir(), 'v041-edge-'))
+  try {
+    // 3) Stripe: 失败提现不计入未捕获废单；paid payout 带 captured=false 不被误过滤；退款行正数税额自动转负冲减
+    const stripeCsv = [
+      'id,type,created,currency,amount,fee,net,status,captured,description,tax_collected',
+      'ch_1,charge,2026-10-02,USD,1050.00,30.00,1020.00,succeeded,true,Order #1,50.00',
+      're_2,refund,2026-10-05,USD,-210.00,0.00,-210.00,succeeded,true,Refund #1,10.00',
+      'po_fail,payout,2026-10-10,USD,-500.00,0.00,-500.00,failed,false,Bank reject,0.00',
+      'po_ok,payout,2026-10-15,USD,-810.00,0.00,-810.00,paid,false,Payout succeeded,0.00',
+    ].join('\n')
+    const sp = join(dir, 'stripe_edge.csv')
+    writeFileSync(sp, stripeCsv, 'utf8')
+    const [ss] = parsePlatformStatement(sp, 'stripe')
+    assert.equal(fmtAmount(ss.grossSales), '1000.00')
+    assert.equal(fmtAmount(ss.customerRefund), '200.00')
+    assert.equal(fmtAmount(ss.selfRemitTaxNet), '40.00')
+    assert.equal(fmtAmount(ss.actualPayout), '810.00')
+    assert.equal(fmtAmount(ss.statementPayoutDiff), '0.00')
+    assert.equal(fmtAmount(ss.uncapturedVoidExcluded), '0.00')
+    assert.ok(ss.anomalies.some((a) => a.category.includes('提现/打款失败') && a.refId === 'po_fail'))
+
+    // 4) XLSX sharedStrings 含 <rPh> 注音引导标签时不污染单元格文本
+    const xlsxBuf = buildTestXlsx({
+      'xl/workbook.xml':
+        '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+        '<sheet name="Order details" sheetId="1" r:id="rId1"/>' +
+        '</sheets></workbook>',
+      'xl/_rels/workbook.xml.rels':
+        '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      'xl/sharedStrings.xml':
+        '<?xml version="1.0"?><sst>' +
+        '<si><t>Type</t></si>' +
+        '<si><t>Order ID</t></si>' +
+        '<si><t>Currency</t></si>' +
+        '<si><t>Gross sales</t><rPh sb="0" eb="5"><t>GROSS</t></rPh></si>' +
+        '<si><t>Total settlement amount</t></si>' +
+        '<si><t>Order</t></si>' +
+        '<si><t>TT-RPH-1</t><rPh sb="0" eb="2"><t>RUBY</t></rPh></si>' +
+        '<si><t>USD</t></si>' +
+        '</sst>',
+      'xl/worksheets/sheet1.xml':
+        '<worksheet><sheetData>' +
+        '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c><c r="D1" t="s"><v>3</v></c><c r="E1" t="s"><v>4</v></c></row>' +
+        '<row r="2"><c r="A2" t="s"><v>5</v></c><c r="B2" t="s"><v>6</v></c><c r="C2" t="s"><v>7</v></c><c r="D2"><v>100</v></c><c r="E2"><v>100</v></c></row>' +
+        '</sheetData></worksheet>',
+    })
+    const xp = join(dir, 'tts_rph.xlsx')
+    writeFileSync(xp, xlsxBuf)
+    const [ts] = parsePlatformStatement(xp, 'tiktok')
+    assert.equal(ts.platform, 'TikTok Shop')
+    assert.equal(fmtAmount(ts.grossSales), '100.00')
+    assert.equal(fmtAmount(ts.horizontalDiffTotal), '0.00')
+    assert.ok(apply)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

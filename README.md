@@ -1,4 +1,4 @@
-# dsh-fintax — 财税工作台 (v0.4.0)
+# dsh-fintax — 财税工作台 (v0.4.1)
 
 [![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

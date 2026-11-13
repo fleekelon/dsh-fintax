@@ -1,4 +1,4 @@
-// dsh-fintax v0.4.0：财税工作台插件入口（Host 半身）。
+// dsh-fintax：财税工作台插件入口（Host 半身）。
 // 纯 ESM、零运行时依赖：
 //   1. 向 ctx.tools 注册 6 个工具（4 个 IMA 知识库只读工具 + 1 个原始结算账单离线初筛体检雷达 fintax_parse_statement + 1 个 7 场景确定性算税与对账引擎 fintax_calc）；
 //   2. 向 ctx.skills 注册 4 个随包财税合规技能；
@@ -21,6 +21,7 @@ import { calculate, platformTaxReconcile } from './lib/calc.js'
 import { parsePlatformStatement, fmtAmount, toNumber2 } from './lib/statement.js'
 
 const PKG_DIR = dirname(fileURLToPath(import.meta.url))
+const PKG_VERSION = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version
 
 export const name = 'fintax'
 export const inject = ['tools', 'skills']
@@ -114,7 +115,7 @@ export function createFintaxApiHandler({ getConnection }) {
 
     try {
       if (subPath === '/status' && method === 'GET') {
-        return send(200, { ok: true, version: '0.4.0', ...getPublicStatus() })
+        return send(200, { ok: true, version: PKG_VERSION, ...getPublicStatus() })
       }
 
       if (subPath === '/credentials' && method === 'POST') {
@@ -171,7 +172,7 @@ export function createFintaxApiHandler({ getConnection }) {
 }
 
 export function apply(ctx) {
-  console.log('[fintax] 财税工作台 v0.4.0 加载中…')
+  console.log(`[fintax] 财税工作台 v${PKG_VERSION} 加载中…`)
 
   // ── 工具 1：列出我的 IMA 知识库 ─────────────────────────────
   ctx.tools.register({
@@ -413,7 +414,7 @@ export function apply(ctx) {
         type: 'object',
         required: true,
         description:
-          'platform_tax_reconcile: {reportedGrossRevenue, refunds=0, marketplaceWithheldTax=0, cutoffAndFxDiff=0, platformFees=0, subsidies=0, reserveChange=0, actualPayout?, declaredVatSales?, principalRole="principal"}；' +
+          'platform_tax_reconcile: {reportedGrossRevenue, refunds=0, marketplaceWithheldTax=0, cutoffAndFxDiff=0, platformFees=0, subsidies=0, selfRemitTaxNet=0, reserveChange=0, actualPayout?, declaredVatSales?, principalRole="principal"}；' +
           'export_invoice_breakeven: {barePurchaseAmount, supplierMarkupRate, vatRate=0.13, rebateRate=vatRate, exportRevenue?, otherDeductibleExpenses=0, invoicedCitRate=0.05, noInvoiceRevenueCitRate=0.002}；' +
           'export_rebate: {purchaseAmount, vatRate=0.13, rebateRate=vatRate}；' +
           'cbec_assessed_cit: {revenue, taxableIncomeRate=0.04, citRate=0.25, smallLowProfit=false}；' +
@@ -534,6 +535,7 @@ export function apply(ctx) {
                 marketplaceWithheldTax: 0, // taxReportingGrossRef 已按不含代扣税的商品原价减商家折扣口径提取
                 platformFees: Math.round(toNumber2(s.totalFees) * fx * 100) / 100,
                 subsidies: Math.round(toNumber2(s.platformSubsidy) * fx * 100) / 100,
+                selfRemitTaxNet: Math.round(toNumber2(s.selfRemitTaxNet) * fx * 100) / 100,
                 reserveChange: Math.round(toNumber2(s.reserveNetChange) * fx * 100) / 100,
                 actualPayout: s.actualPayout > 0n ? Math.round(toNumber2(s.actualPayout) * fx * 100) / 100 : undefined,
                 declaredVatSales: args?.declared_vat_sales_cny,
@@ -617,7 +619,7 @@ export function apply(ctx) {
     })
   }
 
-  console.log('[fintax] 财税工作台 v0.4.0 已加载：6 个工具（含原始账单离线体检雷达 + 7 大确定性场景）+ 4 个技能')
+  console.log(`[fintax] 财税工作台 v${PKG_VERSION} 已加载：6 个工具（含原始账单离线体检雷达 + 7 大确定性场景）+ 4 个技能`)
 }
 
 /** 极简 frontmatter 解析：只取 name / description（单行值），其余交给正文。 */
