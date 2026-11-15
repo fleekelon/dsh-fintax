@@ -1,6 +1,6 @@
 ---
 name: fintax-calc
-description: 税额试算、原始账单体检与差额桥接工作流。用户提供 Amazon/TikTok/Stripe 原始结算账单文件(.csv/.tsv/.xlsx)，或要算平台涉税报送差额对账、供应商开票加点毛利临界点、外贸出口退税、综试区4%核定所得税、年终奖个税、跨境进口综合税、增值税价税分离时使用；必须调用工具做确定性计算，禁止心算报数。
+description: 税额试算、原始账单体检与差额桥接工作流。用户提供 Amazon（Date Range CSV / Flat File V2 .tsv/.txt，含美/欧/英/日/澳 AU 等多站点）、TikTok Shop（.xlsx/.csv）或 Stripe（.csv/.xlsx）原始结算账单文件，或要算平台涉税报送差额对账、供应商开票加点毛利临界点、外贸出口退税、综试区4%核定所得税、年终奖个税、跨境进口综合税、增值税价税分离时使用；必须调用工具做确定性计算，禁止心算报数。
 ---
 
 # 税额试算、原始账单体检与差额桥接工作流
@@ -9,12 +9,12 @@ description: 税额试算、原始账单体检与差额桥接工作流。用户�
 
 ## 步骤
 
-0. **若用户提供了原始结算账单文件（Amazon / TikTok Shop / Stripe 的 `.csv` / `.tsv` / `.xlsx`）**：
+0. **若用户提供了原始结算账单文件（Amazon Date Range CSV / Flat File V2 `.tsv` / `.txt`［含美/欧/英/日/澳 AU 等多站点］、TikTok Shop `.xlsx` / `.csv`、Stripe `.csv` / `.xlsx`）**：
    - **优先直接调用 `fintax_parse_statement`**（传入 `file_path`；若用户告知了汇率与当期已申报销售额，一并传入 `fx_rate_to_cny` 与 `declared_vat_sales_cny`）；
-   - 原样输出四层口径原币拆解、行内水平守恒校验与 P0/P1/P2 异常雷达；若检出异常且已配置 IMA 知识库，自动衔接 `ima_search` 查阅对应处置规范。
+   - 原样输出四层口径原币拆解、行内水平守恒校验与 P0/P1/P2 异常雷达；若检出 **P0 阻断级混表异常**（如 TikTok 全托管供货结算单混入自营表），在折算人民币与按自营零售申报前**必须先提示剔除对应 P0 结算额**；若检出异常且已配置 IMA 知识库，自动衔接 `ima_search` 查阅对应处置规范。
 
 1. **明确口径并选 `fintax_calc` 场景**：确认业务场景后选择对应 `scenario`：
-   - **平台涉税报送 vs 结算放款 vs 申报销售额对账排雷** → `platform_tax_reconcile`（自动拆解退款、代扣境外税、跨期汇率差，轧平理论放款与实际放款，并检测“回款净额报税/佣金违规冲减收入”雷区）
+   - **平台涉税报送 vs 结算放款 vs 申报销售额对账排雷** → `platform_tax_reconcile`（自动拆解退款、代扣境外税、跨期汇率差，支持传入 `selfRemitTaxNet`［待卖家自申报流转税净额］以及 `cutoffAndFxDiff` 正数［跨期调减］或负数［跨期调增］双向桥接，轧平理论放款与实际放款，并检测“回款净额报税/佣金违规冲减收入”雷区）
    - **供应商开票加点「拿专票退税 vs 合规无票免税」比选** → `export_invoice_breakeven`（精算盈亏临界加点率 $g^*$、退税后净采购成本，支持传入 `exportRevenue` 联动对比企业所得税后综合净利）
    - **外贸企业出口退税（购进货物出口，有进项专票）** → `export_rebate`
    - **综试区零售出口企业所得税（无票免税+4%核定征收）** → `cbec_assessed_cit`（含 7500 万营收 / 300 万所得额小微悬崖预警）

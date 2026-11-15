@@ -16,6 +16,7 @@ import {
   platformTaxReconcile,
 } from '../lib/calc.js'
 import { parseAmount, fmtAmount, parsePlatformStatement } from '../lib/statement.js'
+import { imaCall, loadCredentials, getPublicStatus, loadFintaxSettings, saveFintaxSettings, saveCredentials } from '../lib/ima.js'
 
 test('跨境电商综合税：普通商品 13%×70%=9.1%', () => {
   const r = crossBorderImport({ price: 1000 })
@@ -749,6 +750,172 @@ test('v0.4.1 回归：platformTaxReconcile 计入待自申报流转税 + Stripe 
     assert.equal(fmtAmount(ts.horizontalDiffTotal), '0.00')
     assert.ok(apply)
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v0.4.2 回归：科学计数法、Amazon V2 AU/DD-MM-YYYY/佣金税分离、TikTok 长别名匹配与 Stripe payout_cancel', async () => {
+  // 1) parseAmount 科学计数法
+  assert.equal(fmtAmount(parseAmount('1.5e2')), '150.00')
+  assert.equal(fmtAmount(parseAmount('1.5E+3')), '1500.00')
+  assert.equal(fmtAmount(parseAmount('0E-8')), '0.00')
+  assert.equal(fmtAmount(parseAmount('-2.5e1')), '-25.00')
+  assert.equal(fmtAmount(parseAmount('1.5e2 EUR')), '150.00')
+  assert.equal(fmtAmount(parseAmount('(1.5E-2)')), '-0.02')
+
+  // 2) 跨期调增（负数）不再输出“调减 -xxx 元”；超 7500 万营收恒提示小微红线
+  const incRec = platformTaxReconcile({ reportedGrossRevenue: 100000, cutoffAndFxDiff: -5000 })
+  assert.equal(incRec.referenceGrossSales, 105000)
+  assert.ok(incRec.steps[1].includes('调增合计 5000 元') && !incRec.steps[1].includes('调减合计 -5000'))
+  assert.ok(incRec.summaryLine.includes('已叠加口径/时点调增 5000 元'))
+  assert.ok(cbecAssessedCit({ revenue: 80000000 }).warnings.some((w) => w.includes('300万元')))
+
+  const dir = mkdtempSync(join(tmpdir(), 'v042-stmt-'))
+  try {
+    // 3) Amazon Flat File V2（AU 站 + DD/MM/YYYY + ItemFees ServiceFeeTax 不误计入买家税）
+    const amzV2Tsv = [
+      'settlement-id\tsettlement-end-date\ttotal-amount\ttransaction-type\torder-id\tmarketplace-name\tamount-type\tamount-description\tamount\tposted-date',
+      'STL-AU-1\t15/10/2026\t167.00\t\t\t\t\t\t\t',
+      'STL-AU-1\t\t\tOrder\tAU-1001\tAmazon.com.au\tItemPrice\tPrincipal\t200.00\t15/10/2026',
+      'STL-AU-1\t\t\tOrder\tAU-1001\tAmazon.com.au\tItemPrice\tTax\t20.00\t15/10/2026',
+      'STL-AU-1\t\t\tOrder\tAU-1001\tAmazon.com.au\tItemWithheldTax\tMarketplaceFacilitatorTax-Principal\t-20.00\t15/10/2026',
+      'STL-AU-1\t\t\tOrder\tAU-1001\tAmazon.com.au\tItemFees\tCommission\t-30.00\t15/10/2026',
+      'STL-AU-1\t\t\tOrder\tAU-1001\tAmazon.com.au\tItemFees\tServiceFeeTax\t-3.00\t15/10/2026',
+    ].join('\n')
+    const av2Path = join(dir, 'amz_au_v2.txt')
+    writeFileSync(av2Path, amzV2Tsv, 'utf8')
+    const [as] = parsePlatformStatement(av2Path, 'amazon')
+    assert.equal(as.site, 'AU')
+    assert.equal(as.currency, 'AUD')
+    assert.equal(as.period, '2026-10')
+    assert.equal(fmtAmount(as.grossSales), '200.00')
+    assert.equal(fmtAmount(as.platformCommission), '33.00')
+    assert.equal(fmtAmount(as.selfRemitTaxNet), '0.00')
+    assert.equal(fmtAmount(as.statementPayoutDiff), '0.00')
+
+    // 4) TikTok 二轮模糊表头长别名优先 + 全托管混表折算输出 P0 提示
+    const ttCsv = [
+      'Type,Order ID,Shop mode,Currency,Gross sales,Customer-paid shipping fee after discount,Actual shipping fee net,Total settlement amount',
+      'Order,TT-POP-1,POP,RMB,100.00,10.00,-12.00,98.00',
+      'Order,TT-FM-1,Fully managed,RMB,50.00,0.00,0.00,50.00',
+    ].join('\n')
+    const ttPath = join(dir, 'tt_mix.csv')
+    writeFileSync(ttPath, ttCsv, 'utf8')
+    const [ts] = parsePlatformStatement(ttPath, 'tiktok')
+    assert.equal(fmtAmount(ts.grossSales), '160.00')
+    assert.equal(fmtAmount(ts.logisticsWarehousing), '12.00')
+    assert.equal(fmtAmount(ts.horizontalDiffTotal), '0.00')
+
+    const { apply } = await import('../index.js')
+    const tools = {}
+    apply({ tools: { register: (t) => { tools[t.name] = t } }, skills: { register: () => {} } })
+    const ttReport = await tools.fintax_parse_statement.execute({ file_path: ttPath })
+    assert.ok(ttReport.includes('阻断级混表提示'))
+
+    // 5) Stripe payout_cancel 被识别为异常提现，带 captured=false 退款不误算入未捕获废单
+    const stCsv = [
+      'id,type,created,currency,amount,fee,net,status,captured',
+      'ch_1,charge,2026-10-02,USD,100.00,3.00,97.00,succeeded,true',
+      're_1,refund,2026-10-03,USD,-20.00,0.00,-20.00,succeeded,false',
+      'pc_1,payout_cancel,2026-10-04,USD,-50.00,0.00,-50.00,succeeded,false',
+      'po_1,payout,2026-10-05,USD,-77.00,0.00,-77.00,paid,false',
+    ].join('\n')
+    const stPath = join(dir, 'stripe_cancel.csv')
+    writeFileSync(stPath, stCsv, 'utf8')
+    const [ss] = parsePlatformStatement(stPath, 'stripe')
+    assert.equal(fmtAmount(ss.customerRefund), '20.00')
+    assert.equal(fmtAmount(ss.uncapturedVoidExcluded), '0.00')
+    assert.equal(fmtAmount(ss.actualPayout), '77.00')
+    assert.equal(fmtAmount(ss.statementPayoutDiff), '0.00')
+    assert.ok(ss.anomalies.some((a) => a.refId === 'pc_1' && a.category.includes('提现/打款失败')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v0.4.2 回归：IMA 配置一致性、imaCall 调度与 ima_read 全分支覆盖', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'v042-ima-'))
+  const origFetch = globalThis.fetch
+  const savedEnv = {
+    FINTAX_CONFIG_DIR: process.env.FINTAX_CONFIG_DIR,
+    IMA_CLIENT_ID: process.env.IMA_CLIENT_ID,
+    IMA_API_KEY: process.env.IMA_API_KEY,
+    IMA_DEFAULT_KB_ID: process.env.IMA_DEFAULT_KB_ID,
+    IMA_DEFAULT_KB_NAME: process.env.IMA_DEFAULT_KB_NAME,
+  }
+  process.env.FINTAX_CONFIG_DIR = dir
+  delete process.env.IMA_CLIENT_ID
+  delete process.env.IMA_API_KEY
+  delete process.env.IMA_DEFAULT_KB_ID
+  delete process.env.IMA_DEFAULT_KB_NAME
+
+  try {
+    // 1) 混合来源凭证一致性（env clientId + file apiKey）与环境变量覆盖 defaultKbName 防错位
+    saveCredentials({ apiKey: 'file_key_1' })
+    process.env.IMA_CLIENT_ID = 'env_cid_1'
+    const creds = loadCredentials()
+    assert.equal(creds?.clientId, 'env_cid_1')
+    assert.equal(creds?.apiKey, 'file_key_1')
+    assert.equal(getPublicStatus().configured, true)
+
+    saveFintaxSettings({ defaultKbId: 'kb_local', defaultKbName: '本地旧库名' })
+    process.env.IMA_DEFAULT_KB_ID = 'kb_env_override'
+    const envSet = loadFintaxSettings()
+    assert.equal(envSet.defaultKbId, 'kb_env_override')
+    assert.equal(envSet.defaultKbName, '环境变量指定知识库')
+    delete process.env.IMA_DEFAULT_KB_ID
+
+    // 2) mock globalThis.fetch 测试 imaCall、ima_search/ima_browse 空白传参回退默认库、ima_read 多分支
+    globalThis.fetch = async (url, init) => {
+      const u = String(url)
+      if (u.includes('search_knowledge')) {
+        const body = JSON.parse(init.body)
+        assert.equal(body.knowledge_base_id, 'kb_local')
+        return new Response(JSON.stringify({ code: 0, data: { info_list: [{ media_id: 'md_1', title: '2026新规', media_type: 7 }], is_end: true } }))
+      }
+      if (u.includes('get_media_info')) {
+        const { media_id } = JSON.parse(init.body)
+        if (media_id === 'err_biz') return new Response(JSON.stringify({ code: 4001, msg: '无权限' }))
+        if (media_id === 'md_1') return new Response(JSON.stringify({ code: 0, data: { media_type: 7, url_info: { url: 'https://ima.qq.com/raw/doc.md' } } }))
+        if (media_id === 'pdf_1') return new Response(JSON.stringify({ code: 0, data: { media_type: 1, title: '财税汇编.pdf' } }))
+        if (media_id === 'note_1') return new Response(JSON.stringify({ code: 0, data: { media_type: 11, notebook_ext_info: { notebook_id: 'nb_1' } } }))
+        return new Response(JSON.stringify({ code: 0, data: { media_type: 99 } }))
+      }
+      if (u.includes('get_doc_content')) {
+        return new Response(JSON.stringify({ code: 0, data: { content: '笔记正文：公告2026年第11号' } }))
+      }
+      if (u === 'https://ima.qq.com/raw/doc.md') {
+        return new Response('# Markdown 原文\n税总2025年第15号')
+      }
+      return new Response('not found', { status: 404 })
+    }
+
+    const { apply } = await import('../index.js')
+    const tools = {}
+    apply({ tools: { register: (t) => { tools[t.name] = t } }, skills: { register: () => {} } })
+
+    const searchOut = await tools.ima_search.execute({ knowledge_base_id: '   ', query: '2026' })
+    assert.ok(searchOut.includes('[库 kb_local] 命中 1 条'))
+
+    const folderOut = await tools.ima_read.execute({ media_id: 'folder_123' })
+    assert.ok(folderOut.includes('请调用 ima_browse'))
+
+    const mdOut = await tools.ima_read.execute({ media_id: 'md_1' })
+    assert.ok(mdOut.includes('税总2025年第15号'))
+
+    const noteOut = await tools.ima_read.execute({ media_id: 'note_1' })
+    assert.ok(noteOut.includes('公告2026年第11号'))
+
+    const pdfOut = await tools.ima_read.execute({ media_id: 'pdf_1' })
+    assert.ok(pdfOut.includes('二进制文档'))
+
+    await assert.rejects(() => imaCall('openapi/wiki/v1/get_media_info', { media_id: 'err_biz' }), /code=4001/)
+  } finally {
+    globalThis.fetch = origFetch
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
     rmSync(dir, { recursive: true, force: true })
   }
 })

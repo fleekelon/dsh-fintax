@@ -1,4 +1,4 @@
-# dsh-fintax — 财税工作台 (v0.4.1)
+# dsh-fintax — 财税工作台 (v0.4.2)
 
 [![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -9,7 +9,7 @@
 DeepSeek Harness 插件：把**跨境平台原始账单离线体检**、**IMA 专业政策引证问答**与**代码级确定性算税对账**装进桌面工作台。纯 ESM 零第三方依赖（免装 Python / LibreOffice），开箱即用。
 
 - **原始结算账单离线初筛体检与异常雷达（`fintax_parse_statement`，v0.4 重磅新增）**：
-  - 直接读取官方原样导出的 **Amazon**（Date Range CSV 多语种自动跳表头 / Flat File V2）、**TikTok Shop**（Statements 多表 `.xlsx` / `.csv`）、**Stripe 独立站**（余额流水 `.csv` / `.xlsx`）；
+  - 直接读取官方原样导出的 **Amazon**（Date Range CSV 多语种自动跳表头 / Flat File V2（含美/欧/日/澳等全站点））、**TikTok Shop**（Statements 多表 `.xlsx` / `.csv`）、**Stripe 独立站**（余额流水 `.csv` / `.xlsx`）；
   - 纯原生 `BigInt` 定点运算精确到 `0.01` 分，自动剥离 `Marketplace Withheld Tax`（商城代扣流转税）、校验每一行水平守恒、拆解商家折扣 vs 平台补贴 vs 达人佣金，并扫描 **TikTok 全托管混表 P0 阻断、Stripe 虚拟卡直付广告防坐支、未捕获废单、A-to-z 拒付争议** 等高危异常；原始订单行仅在本机内存聚合，绝不外传。
 - **桌面端图形化配置页**：打开 DSH **「设置 → 财税工作台」** 免命令行粘贴保存腾讯 IMA 凭证、一键测试连接并绑定**默认优先财税知识库**。
 - **7 大代码级确定性算税与差额桥接引擎（`fintax_calc`，免配 IMA 亦可离线使用）**：

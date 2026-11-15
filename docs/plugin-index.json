@@ -15,8 +15,8 @@
       "icon": "https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg",
       "versions": [
         {
-          "version": "0.4.1",
-          "publishTimestamp": 1794546229,
+          "version": "0.4.2",
+          "publishTimestamp": 1794728343,
           "source": { "type": "npm" },
           "engines": { "dsh": ">=0.2.1-rc.2 <1.0.0" }
         }

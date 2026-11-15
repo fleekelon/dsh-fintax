@@ -231,7 +231,7 @@ export function apply(ctx) {
     output: textOutput,
     async execute(args) {
       return guarded(async () => {
-        const kbId = String(args?.knowledge_base_id || loadFintaxSettings().defaultKbId || '').trim()
+        const kbId = String(args?.knowledge_base_id ?? '').trim() || String(loadFintaxSettings().defaultKbId ?? '').trim()
         if (!kbId) {
           throw new Error('未指定 knowledge_base_id 且尚未绑定默认知识库（请先调用 ima_list_kbs 获取 ID，或在「设置 → 财税工作台」绑定默认库）')
         }
@@ -284,7 +284,7 @@ export function apply(ctx) {
     output: textOutput,
     async execute(args) {
       return guarded(async () => {
-        const kbId = String(args?.knowledge_base_id || loadFintaxSettings().defaultKbId || '').trim()
+        const kbId = String(args?.knowledge_base_id ?? '').trim() || String(loadFintaxSettings().defaultKbId ?? '').trim()
         if (!kbId) {
           throw new Error('未指定 knowledge_base_id 且尚未绑定默认知识库（请先调用 ima_list_kbs 获取 ID，或在「设置 → 财税工作台」绑定默认库）')
         }
@@ -543,6 +543,11 @@ export function apply(ctx) {
               lines.push(`── 三、人民币折算与申报比对诊断（按汇率 ${fx} 试算）──`)
               lines.push(...rec.steps.map((st) => `· ${st}`))
               if (rec.warnings.length) lines.push(...rec.warnings.map((w) => `⚠ ${w}`))
+              if (p0.length > 0) {
+                lines.push(
+                  '⚠ 阻断级混表提示：上述折算毛收入仍包含尚未剥离的 P0 级异常记录（如全托管供货结算单），在按自营零售申报前请先剔除对应结算额！',
+                )
+              }
             }
           }
 
