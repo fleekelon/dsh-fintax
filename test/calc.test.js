@@ -919,3 +919,167 @@ test('v0.4.2 回归：IMA 配置一致性、imaCall 调度与 ima_read 全分支
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+
+// ── v0.5.0 回归测试套件：UTF-16、.zip 原包、Temu/Shopify、多币种合并对账与 HTML/MD 体检单导出 ──
+
+function encodeUtf16LE(str, withBom = true) {
+  const body = Buffer.from(str, 'utf16le')
+  return withBom ? Buffer.concat([Buffer.from([0xff, 0xfe]), body]) : body
+}
+
+function encodeUtf16BE(str, withBom = true) {
+  const le = Buffer.from(str, 'utf16le')
+  const be = Buffer.alloc(le.length)
+  for (let i = 0; i < le.length; i += 2) {
+    be[i] = le[i + 1]
+    be[i + 1] = le[i]
+  }
+  return withBom ? Buffer.concat([Buffer.from([0xfe, 0xff]), be]) : be
+}
+
+test('v0.5.0 回归：UTF-16LE (含/无 BOM) 与 UTF-16BE Unicode TSV 原始账单解析', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fintax-utf16-'))
+  try {
+    const v2Tsv = [
+      'settlement-id\tsettlement-start-date\ttransaction-type\torder-id\tmarketplace-name\tamount-type\tamount-description\tamount\tcurrency',
+      'S-UTF16\t2026-10-01\tOrder\t114-01\tamazon.com.au\tItemPrice\tPrincipal\t1000.00\tAUD',
+      'S-UTF16\t2026-10-01\tOrder\t114-01\tamazon.com.au\tItemFees\tCommission\t-150.00\tAUD',
+    ].join('\r\n')
+
+    const fLeBom = join(dir, 'v2_le_bom.txt')
+    const fLeRaw = join(dir, 'v2_le_nobom.tsv')
+    const fBeBom = join(dir, 'v2_be_bom.txt')
+    writeFileSync(fLeBom, encodeUtf16LE(v2Tsv, true))
+    writeFileSync(fLeRaw, encodeUtf16LE(v2Tsv, false))
+    writeFileSync(fBeBom, encodeUtf16BE(v2Tsv, true))
+
+    for (const fp of [fLeBom, fLeRaw, fBeBom]) {
+      const [s] = parsePlatformStatement(fp)
+      assert.equal(s.platform, 'Amazon')
+      assert.equal(s.site, 'AU')
+      assert.equal(s.currency, 'AUD')
+      assert.equal(fmtAmount(s.grossSales), '1000.00')
+      assert.equal(fmtAmount(s.platformCommission), '150.00')
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v0.5.0 回归：Temu 半托管/全托管混同 P0 拦截、履约罚款分离与水平守恒轧平', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fintax-temu-'))
+  try {
+    const temuCsv = [
+      '结算时间,订单号,经营模式,账务类型,站点,币种,商品零售价,供货结算价,买家支付运费,商家优惠券,平台补贴,售后退款,技术服务费,尾程物流费,履约罚款,平台代扣税费,保证金变动,应结金额',
+      '2026-10-06,PO-8801,半托管,销售结算,US,USD,45000.00,0.00,1500.00,1500.00,1200.00,0.00,2250.00,6300.00,0.00,3600.00,0.00,37650.00',
+      '2026-10-12,PO-8802,半托管,售后退款,US,USD,0.00,0.00,0.00,0.00,0.00,2000.00,0.00,180.00,0.00,160.00,0.00,-2180.00',
+      '2026-10-16,PO-8803,半托管,违规扣款,US,USD,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,450.00,0.00,0.00,-450.00',
+      '2026-10-19,JIT-7701,全托管,供货货款,US,USD,0.00,12000.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,-1000.00,11000.00',
+      '2026-10-28,WD-1028,,提现打款,US,USD,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,46020.00',
+    ].join('\n')
+    const fp = join(dir, 'Temu_US_202610.csv')
+    writeFileSync(fp, temuCsv, 'utf8')
+
+    const [s] = parsePlatformStatement(fp)
+    assert.equal(s.platform, 'Temu')
+    assert.equal(fmtAmount(s.grossSales), '58500.00')
+    assert.equal(fmtAmount(s.sellerDiscount), '1500.00')
+    assert.equal(fmtAmount(s.taxReportingGrossRef), '57000.00')
+    assert.equal(fmtAmount(s.gatewayDisputeFee), '450.00')
+    assert.equal(fmtAmount(s.reserveNetChange), '1000.00')
+    assert.equal(fmtAmount(s.horizontalDiffTotal), '0.00')
+    assert.equal(fmtAmount(s.statementPayoutDiff), '0.00')
+    assert.ok(s.anomalies.some((a) => a.severity.startsWith('P0') && a.category.includes('全托管')))
+    assert.ok(s.anomalies.some((a) => a.severity.startsWith('P1') && a.category.includes('履约违规罚款')))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v0.5.0 回归：Shopify 独立站自收境外 VAT 剥离、渠道代扣税、弃单过滤与拒付争议分离', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fintax-shopify-'))
+  try {
+    const shpCsv = [
+      'Transaction Date,Type,Order,Financial Status,Currency,Amount,Discount Amount,Tax,Marketplace Facilitator Tax,Fee,Net,Payout ID',
+      '2026-10-04,charge,#2041,paid,EUR,24000.00,1000.00,4000.00,0.00,720.00,23280.00,SHP-PO-101',
+      '2026-10-09,charge,#2042,paid,EUR,11500.00,500.00,0.00,1500.00,345.00,9655.00,SHP-PO-101',
+      '2026-10-14,charge,#2043,pending,EUR,4200.00,0.00,700.00,0.00,0.00,0.00,',
+      '2026-10-18,dispute,#2019,chargeback,EUR,-1200.00,0.00,-200.00,0.00,15.00,-1215.00,SHP-PO-102',
+      '2026-10-29,payout,,paid,EUR,31720.00,0.00,0.00,0.00,0.00,31720.00,SHP-PO-102',
+    ].join('\n')
+    const fp = join(dir, 'Shopify_EU_202610.csv')
+    writeFileSync(fp, shpCsv, 'utf8')
+
+    const [s] = parsePlatformStatement(fp)
+    assert.equal(s.platform, 'Shopify')
+    assert.equal(s.currency, 'EUR')
+    assert.equal(fmtAmount(s.taxReportingGrossRef), '30000.00') // 20000 + 10000
+    assert.equal(fmtAmount(s.selfRemitTaxNet), '3800.00') // 4000 - 200
+    assert.equal(fmtAmount(s.facilitatorTaxStripped), '1500.00')
+    assert.equal(fmtAmount(s.customerRefund), '1000.00')
+    assert.equal(fmtAmount(s.gatewayDisputeFee), '15.00')
+    assert.equal(fmtAmount(s.uncapturedVoidExcluded), '4200.00')
+    assert.equal(fmtAmount(s.horizontalDiffTotal), '0.00')
+    assert.equal(fmtAmount(s.statementPayoutDiff), '0.00')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v0.5.0 回归：.zip 压缩包免解压直拖 + 多币种 fx_rates 合并总对账 + 7500万小微生死崖预警 + HTML/MD 报告导出', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fintax-zip-v05-'))
+  try {
+    const zipBuf = buildTestXlsx({
+      '__MACOSX/._Temu.csv': 'ignored-macos-resource-fork',
+      '2026Q4/Temu_Big_US.csv': [
+        '结算时间,订单号,经营模式,账务类型,站点,币种,商品零售价,商家优惠券,技术服务费,应结金额',
+        '2026-11-10,PO-BIG-1,半托管,销售结算,US,USD,10000000.00,0.00,500000.00,9500000.00',
+        '2026-11-25,WD-BIG,,提现打款,US,USD,0.00,0.00,0.00,9500000.00',
+      ].join('\n'),
+      '2026Q4/Shopify_Big_EUR.csv': [
+        'Transaction Date,Type,Order,Financial Status,Currency,Amount,Tax,Fee,Net,Payout ID',
+        '2026-11-12,charge,#9001,paid,EUR,1200000.00,200000.00,30000.00,1170000.00,P1',
+        '2026-11-28,payout,,paid,EUR,1170000.00,0.00,0.00,1170000.00,P1',
+      ].join('\n'),
+    })
+    const zipPath = join(dir, 'Annual_2026_Statements.zip')
+    writeFileSync(zipPath, zipBuf)
+
+    const { apply } = await import('../index.js')
+    const tools = {}
+    apply({ tools: { register: (t) => { tools[t.name] = t } }, skills: { register: () => {} } })
+
+    const htmlPath = join(dir, 'boss_report.html')
+    const mdPath = join(dir, 'boss_report.md')
+
+    // 10M USD * 7.18 = 71.8M CNY + 1M EUR * 7.82 = 7.82M CNY => 79.62M CNY (> 75M 小微生死崖红线！)
+    const out = await tools.fintax_parse_statement.execute({
+      file_path: zipPath,
+      fx_rates: { USD: 7.18, EUR: 7.82 },
+      declared_vat_sales_cny: 79_620_000,
+      export_report_path: htmlPath,
+    })
+    assert.ok(out.includes('共合并 2 张结算单'))
+    assert.ok(out.includes('放款差额 = 0 元'))
+    assert.ok(out.includes('7,500万小微生死崖红灯'))
+
+    const htmlText = readFileSync(htmlPath, 'utf8')
+    assert.ok(htmlText.includes('跨境店铺原始结算账单 · 税务初筛体检诊断书'))
+    assert.ok(htmlText.includes('7,500万小微生死崖红灯'))
+    assert.ok(!htmlText.includes('借：应收账款')) // 严守护城河，不泄露正式会计分录
+
+    // 验证 demo:all 沙盒与 Markdown 导出
+    const demoOut = await tools.fintax_parse_statement.execute({
+      file_path: 'demo:all',
+      fx_rates: '{"USD": 7.18, "EUR": 7.82}',
+      export_report_path: mdPath,
+    })
+    assert.ok(demoOut.includes('放款差额 = 0 元'))
+    const mdText = readFileSync(mdPath, 'utf8')
+    assert.ok(mdText.includes('# 跨境店铺原始结算单税务初筛体检诊断书'))
+    assert.ok(mdText.includes('Temu 全托管供货与半托管自营混同'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

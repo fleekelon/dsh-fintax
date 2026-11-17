@@ -19,6 +19,7 @@ import {
 } from './lib/ima.js'
 import { calculate, platformTaxReconcile } from './lib/calc.js'
 import { parsePlatformStatement, fmtAmount, toNumber2 } from './lib/statement.js'
+import { buildConsolidatedReconcile, exportDiagnosticReport } from './lib/report.js'
 
 const PKG_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_VERSION = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version
@@ -453,38 +454,69 @@ export function apply(ctx) {
     },
   })
 
-  // ── 工具 6：跨境平台原始结算账单本地初筛体检与异常雷达 ──────────
+  // ── 工具 6：跨境平台原始结算账单本地初筛体检与异常雷达 (v0.5 升级) ──
   ctx.tools.register({
     name: 'fintax_parse_statement',
     description:
-      '本地离线解析跨境电商官方导出的原始结算账单（支持 Amazon Date Range CSV / Flat File V2、TikTok Shop Statements XLSX/CSV、Stripe 独立站余额流水 CSV/XLSX）。采用 BigInt 定点运算精确到分（免装 Python/LibreOffice，原始订单明细不外传），输出四层口径初筛汇总、行内水平守恒校验与 P0/P1/P2 异常交易雷达；可选传入汇率与已申报额直接联动四层口径差额诊断。',
+      '本地离线解析跨境电商官方导出的原始结算账单（支持 Amazon、TikTok Shop、Temu 半托管/全托管、Shopify 独立站、Stripe 的 .csv/.tsv/.txt/.xlsx 及 .zip 压缩包直拖，兼容 UTF-16，亦支持传 demo:all 免文件体验）。采用 BigInt 定点运算精确到分，输出四层口径拆解、水平守恒校验、多币种合并人民币总对账、7500万小微悬崖预警及 P0/P1/P2 异常雷达，并支持一键导出可发给老板审阅的 HTML/Markdown 税务初筛体检诊断书。',
     parameters: {
       file_path: {
         type: 'string',
-        required: true,
-        description: '本机账单文件路径（支持 .csv / .tsv / .txt / .xlsx）。',
+        description: '本机账单文件路径（支持 .csv / .tsv / .txt / .xlsx / .zip，或传 demo:all / demo:temu / demo:shopify 免文件体验）。与 file_paths 二选一即可。',
+      },
+      file_paths: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '可选：多份月度/多站点账单文件路径数组（如年度 1~12 月合并体检）。',
       },
       platform: {
         type: 'string',
-        description: 'auto（默认自动识别表头）| amazon | tiktok | stripe',
+        description: 'auto（默认自动识别表头）| amazon | tiktok | temu | shopify | stripe',
       },
       fx_rate_to_cny: {
         type: 'number',
-        description: '可选：1 原币折合人民币汇率（如 USD 传 7.12）；原币已为 RMB 时默认按 1.0 处理。传入后自动折算人民币四层口径。',
+        description: '可选：单币种折合人民币汇率（如 USD 传 7.18）。多币种账单请改用 fx_rates。',
+      },
+      fx_rates: {
+        type: 'object',
+        description: '可选：多币种汇率映射（如 {"USD": 7.18, "EUR": 7.82, "GBP": 9.15, "AUD": 4.72}），用于多站点/多币种合并折算总对账。',
       },
       declared_vat_sales_cny: {
         type: 'number',
-        description: '可选：企业当期实际已申报增值税/出口销售额（人民币，元）；配合 fx_rate_to_cny 自动执行申报缺口与“回款净额报税”排雷诊断。',
+        description: '可选：企业当期或全年累计实际已申报增值税/出口销售额（人民币，元）；自动执行合并申报缺口与“回款净额报税”诊断。',
+      },
+      export_report_path: {
+        type: 'string',
+        description: '可选：导出本地《税务初筛体检诊断书》路径（传 "auto" 自动在账单同目录生成可打印 .html 汇报单，传 "auto.md" 生成 Markdown，或指定具体 .html/.md 路径）。',
       },
     },
     output: textOutput,
     async execute(args) {
       return guarded(async () => {
-        const fp = String(args?.file_path ?? '').trim()
-        if (!fp) throw new Error('file_path（本地账单文件路径）不能为空')
-        const summaries = parsePlatformStatement(fp, args?.platform || 'auto')
-        const blocks = []
+        const inputPaths = []
+        if (args?.file_path && String(args.file_path).trim()) inputPaths.push(String(args.file_path).trim())
+        if (Array.isArray(args?.file_paths)) {
+          for (const p of args.file_paths) {
+            if (p && String(p).trim()) inputPaths.push(String(p).trim())
+          }
+        }
+        if (!inputPaths.length) throw new Error('file_path（本地账单文件路径）不能为空')
 
+        const summaries = parsePlatformStatement(inputPaths, args?.platform || 'auto')
+        const hasFxInput =
+          (args?.fx_rate_to_cny !== null && args?.fx_rate_to_cny !== undefined && String(args.fx_rate_to_cny).trim() !== '') ||
+          (args?.fx_rates && (typeof args.fx_rates === 'object' || String(args.fx_rates).trim() !== '')) ||
+          summaries.every((s) => s.currency === 'RMB' || s.currency === 'CNY')
+
+        const consolidated = hasFxInput
+          ? buildConsolidatedReconcile(summaries, {
+              fxRateToCny: args?.fx_rate_to_cny,
+              fxRates: args?.fx_rates,
+              declaredVatSalesCny: args?.declared_vat_sales_cny,
+            })
+          : null
+
+        const blocks = []
         for (const s of summaries) {
           const ccy = s.currency
           const p0 = s.anomalies.filter((a) => a.severity.startsWith('P0'))
@@ -506,7 +538,7 @@ export function apply(ctx) {
             `    ├─ 联盟达人佣金（Affiliate/TAP）：${fmtAmount(s.affiliateCommission)}`,
             `    ├─ FBA / 仓储及尾程物流费：${fmtAmount(s.logisticsWarehousing)}`,
             `    ├─ 站内广告 / 网关直付广告费：${fmtAmount(s.inPlatformAds)}`,
-            `    └─ 支付网关及拒付争议处理费：${fmtAmount(s.gatewayDisputeFee)}`,
+            `    └─ 支付网关 / 拒付争议及履约罚款：${fmtAmount(s.gatewayDisputeFee)}`,
             `· 已自动剥离（商城代扣代缴流转税，不计入收入）：${fmtAmount(s.facilitatorTaxStripped)}`,
             `· ⑩ 非代扣待卖家自申报流转税净流入（应计其他应付款，勿混入收入）：${fmtAmount(s.selfRemitTaxNet)}`,
             `· ⑪ 冻结准备金/保证金净变动（+新增冻结 / -释放前期）：${fmtAmount(s.reserveNetChange)}`,
@@ -521,37 +553,22 @@ export function apply(ctx) {
             )
           }
           if (s.uncapturedVoidExcluded > 0n) {
-            lines.push(`· 已自动过滤未捕获预授权/取消废单金额：${fmtAmount(s.uncapturedVoidExcluded)} ${ccy}`)
+            lines.push(`· 已自动过滤未捕获预授权/未结清废单金额：${fmtAmount(s.uncapturedVoidExcluded)} ${ccy}`)
           }
 
-          // 可选联动：按汇率折算人民币并接入 platformTaxReconcile
-          const rawFx = args?.fx_rate_to_cny ?? (ccy === 'RMB' ? 1 : null)
-          if (rawFx !== null && rawFx !== undefined && String(rawFx).trim() !== '' && summaries.length === 1) {
-            const fx = Number(rawFx)
-            if (Number.isFinite(fx) && fx > 0) {
-              const rec = platformTaxReconcile({
-                reportedGrossRevenue: Math.round(toNumber2(s.taxReportingGrossRef) * fx * 100) / 100,
-                refunds: Math.round(toNumber2(s.customerRefund) * fx * 100) / 100,
-                marketplaceWithheldTax: 0, // taxReportingGrossRef 已按不含代扣税的商品原价减商家折扣口径提取
-                platformFees: Math.round(toNumber2(s.totalFees) * fx * 100) / 100,
-                subsidies: Math.round(toNumber2(s.platformSubsidy) * fx * 100) / 100,
-                selfRemitTaxNet: Math.round(toNumber2(s.selfRemitTaxNet) * fx * 100) / 100,
-                reserveChange: Math.round(toNumber2(s.reserveNetChange) * fx * 100) / 100,
-                actualPayout: s.actualPayout > 0n ? Math.round(toNumber2(s.actualPayout) * fx * 100) / 100 : undefined,
-                declaredVatSales: args?.declared_vat_sales_cny,
-              })
-              lines.push(`── 三、人民币折算与申报比对诊断（按汇率 ${fx} 试算）──`)
-              lines.push(...rec.steps.map((st) => `· ${st}`))
-              if (rec.warnings.length) lines.push(...rec.warnings.map((w) => `⚠ ${w}`))
-              if (p0.length > 0) {
-                lines.push(
-                  '⚠ 阻断级混表提示：上述折算毛收入仍包含尚未剥离的 P0 级异常记录（如全托管供货结算单），在按自营零售申报前请先剔除对应结算额！',
-                )
-              }
+          if (summaries.length === 1 && consolidated?.ready) {
+            const rec = consolidated.reconcile
+            lines.push(`── 三、人民币折算与申报比对诊断（按汇率 ${consolidated.breakdown[0].fx} 试算）──`)
+            lines.push(...rec.steps.map((st) => `· ${st}`))
+            if (rec.warnings.length) lines.push(...rec.warnings.map((w) => `⚠ ${w}`))
+            if (consolidated.cliffAlert) lines.push(consolidated.cliffAlert)
+            if (p0.length > 0) {
+              lines.push(
+                '⚠ 阻断级混表提示：上述折算毛收入仍包含尚未剥离的 P0 级异常记录（如全托管供货结算单），在按自营零售申报前请先剔除对应结算额！',
+              )
             }
           }
 
-          // 异常雷达展示（限制每级展示条数防止大账单撑爆上下文）
           lines.push(`── 异常交易雷达扫描结果（P0阻断 ${p0.length} 项 | P1高危 ${p1.length} 项 | P2关注 ${p2.length} 项）──`)
           if (s.anomalies.length === 0) {
             lines.push('✔ 未检出异常交易记录。')
@@ -568,9 +585,46 @@ export function apply(ctx) {
           lines.push(
             '── 合规与关账边界说明 ──',
             '· 如检出 P0/P1 异常（如全托管混表、网关余额坐支海外广告、非代扣待申报流转税、回款净额漏报），若已配置 IMA 知识库可调用 ima_search 检索对应实操 SOP 与政策原文。',
-            '· 本工具提供单店原始账单初筛体检与异常排雷；企业月末正式关账仍须结合多店铺主体映射、央行基准汇率、第三方收款机构期初期末资金池、海关报关离境跨期台账及标准借贷会计分录完成完整底稿复核。',
+            '· 本工具提供原始账单离线初筛体检与异常排雷；企业正式关账仍须结合多店铺主体映射、央行基准汇率、第三方收款机构期初期末资金池、海关报关离境跨期台账及标准借贷会计分录完成完整底稿复核。',
           )
           blocks.push(lines.join('\n'))
+        }
+
+        if (summaries.length > 1 && consolidated) {
+          if (consolidated.ready) {
+            const cLines = [
+              `【多表/多币种合并人民币总对账 & 年终红线核验（共合并 ${summaries.length} 张结算单）】`,
+              ...consolidated.breakdown.map(
+                (b) => `· 分表折算 [${b.label}]：原币报送毛额 ${b.grossOrig} ${b.currency} × 汇率 ${b.fx} = ${b.grossCny.toFixed(2)} 元`,
+              ),
+              ...consolidated.reconcile.steps.map((st) => `· ${st}`),
+              ...consolidated.reconcile.warnings.map((w) => `⚠ ${w}`),
+              `· 7,500万小微核定红线进度：当前合并净销售额占 7,500 万元红线的 ${consolidated.cliffRatioPct}%`,
+            ]
+            if (consolidated.cliffAlert) cLines.push(consolidated.cliffAlert)
+            if (consolidated.p0Count > 0) {
+              cLines.push(
+                '⚠ 阻断级混表提示：合并毛收入中含 P0 级异常记录（如全托管供货结算），按境外自营零售申报前请先剥离对应供货额！',
+              )
+            }
+            blocks.push(cLines.join('\n'))
+          } else {
+            blocks.push(
+              `【多币种合并折算提示】检测到多币种账单，尚缺币种 [${consolidated.missingCurrencies.join(', ')}] 的人民币汇率；请传入 fx_rates（如 {"USD": 7.18, "EUR": 7.82}）即可一键完成合并人民币总对账。`,
+            )
+          }
+        }
+
+        if (args?.export_report_path) {
+          const savedPath = exportDiagnosticReport({
+            summaries,
+            consolidated,
+            exportPath: args.export_report_path,
+            firstInputPath: inputPaths[0],
+          })
+          if (savedPath) {
+            blocks.push(`📄 已生成可打印汇报版《税务初筛体检诊断书》：${savedPath}（可直接用浏览器打开打印 PDF 发给老板或团队审阅）`)
+          }
         }
 
         return blocks.join('\n\n========================================\n\n')
