@@ -22,27 +22,36 @@ DeepSeek Harness 插件：把**跨境平台原始账单离线体检**、**IMA �
   7. **增值税价税分离（`vat`）**。
 - **政策引证问答 & 监管代码决策树**：只读检索你 IMA 知识库里的政策原文与 SOP，回答附真实来源与文号。
 
-## 实测效果
+## 实测效果与界面预览
 
-真实模型端到端测试：Agent 自动检索知识库 → 核对政策原文 → 调用确定性引擎计算 → 输出带引证的完整回答：
+1. **原始结算账单毫秒级离线初筛与 P0/P1 异常雷达（`fintax_parse_statement`）**：
 
-![E2E 实测：综合税计算](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/e2e-tax-calculation.png)
+![原始账单离线体检与异常雷达](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/statement-radar.png)
 
-插件页安装状态：
+2. **桌面端「设置 → 财税工作台」免命令行一键绑库与提问模板**：
 
-![插件页](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/plugin-page.png)
+![图形化设置面板](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/settings-workbench.png)
 
-## 安装
+3. **7 大代码级确定性算税对账引擎与 4 项现行法规技能矩阵**：
+
+![7大确定性算税引擎](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/calc-engines.png)
+
+## 安装（支持图形界面一键安装，无需命令行）
+
+`dsh-fintax` 已收录至 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 与 [dsh-market](https://github.com/dsh-market/dsh-market) 插件市场目录：
+
+### 方式一：DSH 桌面端图形界面一键安装（推荐，财务/老板零门槛）
+- **原生插件管理**：打开官方 DSH Desktop 应用内的 **「设置 → 插件」**，直接搜索 **`dsh-fintax`** 点击安装即可，全程无需敲命令行；
+- **可视化插件市场**：若已安装社区插件市场（`dshmarket`）或开启 **「插件 → 发现（Discover）」**，搜索 **「财税工作台」** 或 **`dsh-fintax`** 一键点装即可。
+
+### 方式二：命令行安装（适用于 `dsh web` 或开发者自定义 Profile）
 
 ```sh
-# 从 npm（推荐，预构建免授权）
+# 从 npm 安装最新版（预构建免授权）
 dsh plugin --profile <你的profile> add dsh-fintax
 
-# 从 GitHub
+# 从 GitHub 安装
 dsh plugin --profile <你的profile> add github:fleekelon/dsh-fintax
-
-# 本地目录
-dsh plugin --profile <你的profile> add /path/to/dsh-fintax
 ```
 
 兼容 DSH >= 0.2.1-rc.2。
