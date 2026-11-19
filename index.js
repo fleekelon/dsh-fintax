@@ -1,6 +1,6 @@
 // dsh-fintax：财税工作台插件入口（Host 半身）。
 // 纯 ESM、零运行时依赖：
-//   1. 向 ctx.tools 注册 6 个工具（4 个 IMA 知识库只读工具 + 1 个原始结算账单离线初筛体检雷达 fintax_parse_statement + 1 个 7 场景确定性算税与对账引擎 fintax_calc）；
+//   1. 向 ctx.tools 注册 6 个工具（4 个 IMA 知识库只读工具 + 1 个 11 通道账单与结汇链离线初筛体检雷达 fintax_parse_statement + 1 个 10 场景确定性算税与对账引擎 fintax_calc）；
 //   2. 向 ctx.skills 注册 4 个随包财税合规技能；
 //   3. 当宿主挂载 webServer 时，提供经会话准入校验的 /api/fintax/* 设置接口（配合 client.js 图形化设置页，绝不回传密钥明文）。
 
@@ -26,6 +26,7 @@ import {
   renderAnomaliesCsv,
   renderDiagnosticReportHtml,
   renderDiagnosticReportMd,
+  renderRollingTrendReportHtml,
   serializeSummary,
 } from './lib/report.js'
 import { computeRolling12m, deleteSnapshot, loadHistory, saveSnapshot } from './lib/history.js'
@@ -80,7 +81,9 @@ function readJsonBody(req, maxBytes = 32_768) {
     req.on('data', (chunk) => {
       total += chunk.length
       if (total > maxBytes) {
-        reject(new Error('请求体过大'))
+        const err = new Error('请求体过大')
+        err.statusCode = 413
+        reject(err)
         req.destroy()
         return
       }
@@ -91,7 +94,9 @@ function readJsonBody(req, maxBytes = 32_768) {
         const raw = Buffer.concat(chunks).toString('utf8').trim()
         resolve(raw ? JSON.parse(raw) : {})
       } catch {
-        reject(new Error('请求体不是合法的 JSON'))
+        const err = new Error('请求体不是合法的 JSON')
+        err.statusCode = 400
+        reject(err)
       }
     })
     req.on('error', reject)
@@ -146,10 +151,15 @@ export function createFintaxApiHandler({ getConnection }) {
 
       if (subPath === '/settings' && method === 'POST') {
         const body = await readJsonBody(req)
-        saveFintaxSettings({
-          defaultKbId: body?.defaultKbId ?? '',
-          defaultKbName: body?.defaultKbName ?? '',
-        })
+        const patch = {}
+        if (body && Object.prototype.hasOwnProperty.call(body, 'defaultKbId')) patch.defaultKbId = body.defaultKbId ?? ''
+        if (body && Object.prototype.hasOwnProperty.call(body, 'defaultKbName')) patch.defaultKbName = body.defaultKbName ?? ''
+        if (body && Object.prototype.hasOwnProperty.call(body, 'customFxRates')) patch.customFxRates = body.customFxRates
+        try {
+          saveFintaxSettings(patch)
+        } catch (cfgErr) {
+          return send(400, { error: cfgErr?.message || '配置参数校验失败' })
+        }
         return send(200, { ok: true, ...getPublicStatus() })
       }
 
@@ -253,6 +263,13 @@ export function createFintaxApiHandler({ getConnection }) {
         return send(200, { ok: true, history, rolling12m: computeRolling12m(history) })
       }
 
+      if (subPath === '/history/report' && method === 'GET') {
+        const history = loadHistory()
+        const rolling12m = computeRolling12m(history)
+        const reportHtml = renderRollingTrendReportHtml({ history, rolling12m, version: PKG_VERSION })
+        return send(200, { ok: true, version: PKG_VERSION, reportHtml })
+      }
+
       if (subPath === '/history' && method === 'POST') {
         const body = await readJsonBody(req, 65_536)
         try {
@@ -277,6 +294,10 @@ export function createFintaxApiHandler({ getConnection }) {
 
       return send(404, { error: `未知接口：${method} ${subPath}` })
     } catch (err) {
+      const code = Number(err?.statusCode)
+      if (code === 400 || code === 413) {
+        return send(code, { error: err?.message || '请求参数无效' })
+      }
       return send(500, { error: err?.message || '内部错误' })
     }
   }
@@ -574,24 +595,24 @@ export function apply(ctx) {
     },
   })
 
-  // ── 工具 6：跨境平台原始结算账单本地初筛体检与异常雷达 (v0.7 升级 8 大平台) ──
+  // ── 工具 6：跨境平台与结汇通道原始账单本地初筛体检与三段资金链核对 (v0.8 升级 11 通道) ──
   ctx.tools.register({
     name: 'fintax_parse_statement',
     description:
-      '本地离线解析跨境电商 8 大平台与资金池原始结算账单（支持 Amazon、TikTok Shop、Temu、速卖通 AliExpress、Shopee、Shopify、PayPal、Stripe 的 .csv/.tsv/.txt/.xlsx、.zip 及 UTF-16，也可试用 demo:all / demo:v7 / demo:full）。输出报送参考数、资金勾稽、多币种初筛与 P0/P1/P2 异常，支持导出 HTML/Markdown 诊断书或异常 CSV。',
+      '本地离线解析跨境电商 8 大销售平台（Amazon、TikTok Shop、Temu、速卖通 AliExpress、Shopee、Shopify、PayPal、Stripe）及 3 大第三方结汇通道（万里汇 WorldFirst、派安盈 Payoneer、空中云汇 Airwallex）原始账单（支持 .csv/.tsv/.txt/.xlsx/.zip 及 UTF-16，也可试用 demo:all / demo:v7 / demo:v8 / demo:wallets / demo:full）。自动执行「平台放款→结汇入账→境内对公收汇」三段资金交叉核对（绝不重复计税）、多币种初筛与 P0/P1/P2 异常雷达，支持导出 HTML/Markdown 诊断书或异常 CSV。',
     parameters: {
       file_path: {
         type: 'string',
-        description: '本机账单文件路径（支持 .csv / .tsv / .txt / .xlsx / .zip，或传 demo:all / demo:v7 / demo:full / demo:paypal / demo:aliexpress / demo:shopee 免文件体验）。与 file_paths 二选一即可。',
+        description: '本机账单文件路径（支持 .csv / .tsv / .txt / .xlsx / .zip，或传 demo:all / demo:v7 / demo:v8 / demo:wallets / demo:full / demo:worldfirst / demo:payoneer / demo:airwallex 免文件体验）。与 file_paths 二选一即可。',
       },
       file_paths: {
         type: 'array',
         items: { type: 'string' },
-        description: '可选：多份月度/多站点账单文件路径数组（如年度 1~12 月合并体检）。',
+        description: '可选：多份月度/多站点及第三方结汇流水路径数组（同时传入销售平台账单与结汇流水将自动激活三段资金交叉核对）。',
       },
       platform: {
         type: 'string',
-        description: 'auto（默认自动识别表头）| amazon | tiktok | temu | aliexpress | shopee | shopify | paypal | stripe',
+        description: 'auto（默认自动识别表头）| amazon | tiktok | temu | aliexpress | shopee | shopify | paypal | stripe | worldfirst | payoneer | airwallex',
       },
       fx_rate_to_cny: {
         type: 'number',
@@ -643,29 +664,45 @@ export function apply(ctx) {
           const p1 = s.anomalies.filter((a) => a.severity.startsWith('P1'))
           const p2 = s.anomalies.filter((a) => a.severity.startsWith('P2'))
 
-          const lines = [
-            `【跨境原始账单初筛体检报告｜${s.platform} · ${s.site} · ${ccy}】`,
-            `· 文件与格式：${s.fileName} — ${s.formatLabel}`,
-            `· 识别期间：${s.period} | 有效明细行数：${s.rawRowCount} 行`,
-            `── 一、原币报送参考与结算项目（单位：${ccy}，精确到 0.01）──`,
-            `· ① 商品含运费原价总额：${fmtAmount(s.grossSales)}`,
-            `· ② 减：商家承担促销折扣：${fmtAmount(s.sellerDiscount)}`,
-            `· ★ 账单推算报送参考毛额（①−②）：${fmtAmount(s.taxReportingGrossRef)}；正式报送总额请核对实际报送单及补贴归属。`,
-            `· ③ 加：平台出资补贴 / 库存赔付：${fmtAmount(s.platformSubsidy)}`,
-            `· ④ 减：客户退款本金：${fmtAmount(s.customerRefund)}`,
-            `· ⑤~⑨ 平台与履约费用合计（主要责任人须单独列支成本费用，严禁直接冲减收入）：${fmtAmount(s.totalFees)}`,
-            `    ├─ 平台佣金及交易手续费：${fmtAmount(s.platformCommission)}`,
-            `    ├─ 联盟达人佣金（Affiliate/TAP）：${fmtAmount(s.affiliateCommission)}`,
-            `    ├─ FBA / 仓储及尾程物流费：${fmtAmount(s.logisticsWarehousing)}`,
-            `    ├─ 站内广告 / 网关直付广告费：${fmtAmount(s.inPlatformAds)}`,
-            `    └─ 支付网关 / 拒付争议及履约罚款：${fmtAmount(s.gatewayDisputeFee)}`,
-            `· 已自动剥离（商城代扣代缴流转税，不计入收入）：${fmtAmount(s.facilitatorTaxStripped)}`,
-            `· ⑩ 非代扣待卖家自申报流转税净流入（应计其他应付款，勿混入收入）：${fmtAmount(s.selfRemitTaxNet)}`,
-            `· ⑪ 冻结准备金/保证金净变动（+新增冻结 / -释放前期）：${fmtAmount(s.reserveNetChange)}`,
-            `── 二、资金桥接与账单内部勾稽 ──`,
-            `· 行内水平守恒校验：差额 ${fmtAmount(s.horizontalDiffTotal)} ${ccy}（${s.horizontalDiffTotal === 0n ? '✔ 全部明细行水平守恒通过' : '❌ 存在行内不守恒阻断项，见下方异常雷达'}）`,
-            `· 理论应放款净额：${fmtAmount(s.theoreticalPayout)} ${ccy} | 账单内提取实际打款（Payout）：${fmtAmount(s.actualPayout)} ${ccy} | 放款差额（实际 − 理论，正为多放、负为少放）：${fmtAmount(s.statementPayoutDiff)} ${ccy}`,
-          ]
+          const lines = s.role === 'settlement_wallet' && s.walletMetrics
+            ? [
+                `【第三方结汇通道资金排雷报告｜${s.platform} · ${s.site} · ${ccy}】`,
+                `· 文件与格式：${s.fileName} — ${s.formatLabel}`,
+                `· 识别期间：${s.period} | 有效明细行数：${s.rawRowCount} 行（口径声明：结汇通道不重复计入销售报送总额）`,
+                `── 一、结汇通道资金流向拆解（单位：${ccy}，精确到 0.01）──`,
+                `· ① 电商平台/收单网关回款入账：${fmtAmount(s.walletMetrics.platformInbound)}`,
+                `· ② 非标准平台/其他入账（请核实来源防漏报）：${fmtAmount(s.walletMetrics.otherInbound)}`,
+                `· ③ 结汇提现至境内对公账户（合规回流）：${fmtAmount(s.walletMetrics.fxWithdrawToCorporate)}`,
+                `· ④ 提现至个人私户/法人私卡（公私混收 P0 阻断）：${fmtAmount(s.walletMetrics.fxWithdrawToPersonal)}`,
+                `· ⑤ 收款户性质待核提现（未计入已确认对公回流，P1）：${fmtAmount(s.walletMetrics.unverifiedWithdraw || 0n)}`,
+                `· ⑥ 钱包余额境外坐支（供应商/物流/广告/卡消费，P1 高危）：${fmtAmount(s.walletMetrics.directSpend)}`,
+                `· ⑦ 提现/汇兑/账户手续费：${fmtAmount(s.walletMetrics.walletFees)}`,
+                `· ⑧ 已自动剥离同户换汇/多币种互转：${fmtAmount(s.walletMetrics.internalFxStripped)}（${s.walletMetrics.internalFxCount} 笔，本币净变动 ${fmtAmount(s.walletMetrics.internalFxNet || 0n)}）`,
+                `· ⑨ 当期滞留境外未结汇净额：${fmtAmount(s.walletMetrics.unrepatriatedNet)} | 水平校验：${s.walletMetrics.netVerifiedRows > 0 ? `已核验 ${s.walletMetrics.netVerifiedRows} 行，差额 ${fmtAmount(s.horizontalDiffTotal)} ${ccy}` : '原表无 Net 校验列'}`,
+              ]
+            : [
+                `【跨境原始账单初筛体检报告｜${s.platform} · ${s.site} · ${ccy}】`,
+                `· 文件与格式：${s.fileName} — ${s.formatLabel}`,
+                `· 识别期间：${s.period} | 有效明细行数：${s.rawRowCount} 行`,
+                `── 一、原币报送参考与结算项目（单位：${ccy}，精确到 0.01）──`,
+                `· ① 商品含运费原价总额：${fmtAmount(s.grossSales)}`,
+                `· ② 减：商家承担促销折扣：${fmtAmount(s.sellerDiscount)}`,
+                `· ★ 账单推算报送参考毛额（①−②）：${fmtAmount(s.taxReportingGrossRef)}；正式报送总额请核对实际报送单及补贴归属。`,
+                `· ③ 加：平台出资补贴 / 库存赔付：${fmtAmount(s.platformSubsidy)}`,
+                `· ④ 减：客户退款本金：${fmtAmount(s.customerRefund)}`,
+                `· ⑤~⑨ 平台与履约费用合计（主要责任人须单独列支成本费用，严禁直接冲减收入）：${fmtAmount(s.totalFees)}`,
+                `    ├─ 平台佣金及交易手续费：${fmtAmount(s.platformCommission)}`,
+                `    ├─ 联盟达人佣金（Affiliate/TAP）：${fmtAmount(s.affiliateCommission)}`,
+                `    ├─ FBA / 仓储及尾程物流费：${fmtAmount(s.logisticsWarehousing)}`,
+                `    ├─ 站内广告 / 网关直付广告费：${fmtAmount(s.inPlatformAds)}`,
+                `    └─ 支付网关 / 拒付争议及履约罚款：${fmtAmount(s.gatewayDisputeFee)}`,
+                `· 已自动剥离（商城代扣代缴流转税，不计入收入）：${fmtAmount(s.facilitatorTaxStripped)}`,
+                `· ⑩ 非代扣待卖家自申报流转税净流入（应计其他应付款，勿混入收入）：${fmtAmount(s.selfRemitTaxNet)}`,
+                `· ⑪ 冻结准备金/保证金净变动（+新增冻结 / -释放前期）：${fmtAmount(s.reserveNetChange)}`,
+                `── 二、资金桥接与账单内部勾稽 ──`,
+                `· 行内水平守恒校验：差额 ${fmtAmount(s.horizontalDiffTotal)} ${ccy}（${s.horizontalDiffTotal === 0n ? '✔ 全部明细行水平守恒通过' : '❌ 存在行内不守恒阻断项，见下方异常雷达'}）`,
+                `· 理论应放款净额：${fmtAmount(s.theoreticalPayout)} ${ccy} | 账单内提取实际打款（Payout）：${fmtAmount(s.actualPayout)} ${ccy} | 放款差额（实际 − 理论，正为多放、负为少放）：${fmtAmount(s.statementPayoutDiff)} ${ccy}`,
+              ]
 
           if (s.statementPayoutDiff !== 0n && s.horizontalDiffTotal === 0n) {
             lines.push(
@@ -712,15 +749,32 @@ export function apply(ctx) {
 
         if (summaries.length > 1 && consolidated) {
           if (consolidated.ready) {
+            const hasSales = summaries.some((s) => s.role !== 'settlement_wallet')
             const cLines = [
               `【多表/多币种合并人民币总对账 & 年终红线核验（共合并 ${summaries.length} 张结算单）】`,
-              ...consolidated.breakdown.map(
-                (b) => `· 分表折算 [${b.label}]：原币报送毛额 ${b.grossOrig} ${b.currency} × 汇率 ${b.fx} = ${b.grossCny.toFixed(2)} 元`,
+              ...consolidated.breakdown.map((b) =>
+                b.role === 'settlement_wallet'
+                  ? `· 结汇通道 [${b.label}]：平台入账折合 ¥${(b.walletInboundCny || 0).toFixed(2)} ｜ 对公回流折合 ¥${(b.corporateWithdrawCny || 0).toFixed(2)}（汇率 ${b.fx}，不重复计入销售报送额）`
+                  : `· 分表折算 [${b.label}]：原币报送毛额 ${b.grossOrig} ${b.currency} × 汇率 ${b.fx} = ${b.grossCny.toFixed(2)} 元`,
               ),
               ...consolidated.reconcile.steps.map((st) => `· ${st}`),
               ...consolidated.reconcile.warnings.map((w) => `⚠ ${w}`),
-              `· 4% 核定收入等值初筛：当前合并报送参考净额为 7,500 万元等值的 ${consolidated.cliffRatioPct}%。年度应纳税所得额须按主体另行核定。`,
+              ...(hasSales
+                ? [`· 4% 核定收入等值初筛：当前合并报送参考净额为 7,500 万元等值的 ${consolidated.cliffRatioPct}%。年度应纳税所得额须按主体另行核定。`]
+                : []),
             ]
+            if (consolidated.fundChain) {
+              const fc = consolidated.fundChain
+              const s1Txt = fc.hasSalesEvidence ? `¥${fc.stage1PlatformPayoutCny.toFixed(2)}` : '待导入销售账单'
+              const gapTxt = fc.hasSalesEvidence ? `¥${fc.stage1to2GapCny.toFixed(2)}` : '待核对'
+              const rateTxt = fc.corporateRepatriationRatePct !== null ? `${fc.corporateRepatriationRatePct}%` : '待核'
+              cLines.push(
+                `── 三段资金链路交叉核对（平台放款 → 结汇通道 → 境内对公收汇）──`,
+                `· ① 销售平台实际放款：${s1Txt} ｜ ② 结汇通道平台入账：¥${fc.stage2WalletInboundCny.toFixed(2)}${fc.stage2OtherInboundCny > 0 ? `（+其他入账 ¥${fc.stage2OtherInboundCny.toFixed(2)}）` : ''} ｜ 一/二段差异：${gapTxt}`,
+                `· ③ 境内对公回流：¥${fc.stage3CorporateRepatriatedCny.toFixed(2)}（回流率 ${rateTxt}）｜ 私户提现(P0)：¥${fc.stage3PersonalWithdrawCny.toFixed(2)} ｜ 待核提现(P1)：¥${(fc.stage3UnverifiedWithdrawCny || 0).toFixed(2)} ｜ 境外坐支(P1)：¥${fc.directSpendCny.toFixed(2)} ｜ 滞留境外：¥${fc.retainedOffshoreCny.toFixed(2)}`,
+                ...fc.alerts.map((a) => `· ${a}`),
+              )
+            }
             if (consolidated.cliffAlert) cLines.push(consolidated.cliffAlert)
             if (consolidated.p0Count > 0) {
               cLines.push(
@@ -799,7 +853,7 @@ export function apply(ctx) {
     })
   }
 
-  console.log(`[fintax] 财税工作台 v${PKG_VERSION} 已加载：6 个工具（8 大平台账单离线体检雷达 + 10 大确定性算税场景 + 12 个月滚年归档）+ 4 个技能`)
+  console.log(`[fintax] 财税工作台 v${PKG_VERSION} 已加载：6 个工具（11 通道账单与结汇链离线体检雷达 + 10 大确定性算税场景 + 12 个月滚年归档）+ 4 个技能`)
 }
 
 /** 极简 frontmatter 解析：只取 name / description（单行值），其余交给正文。 */

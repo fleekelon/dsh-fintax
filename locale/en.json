@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "FinTax workbench",
-    "description": "DSH sidebar workbench for offline statements and .zip archives from eight platforms and wallets, four tax and accounting figures with separate payout reconciliation, 10 tax calculators, rolling 12-month risk screening, printable reports and CSV exports, and Tencent IMA policy search."
+    "description": "DSH sidebar workbench for offline statements and .zip archives from 8 sales platforms plus 3 settlement wallets (WorldFirst, Payoneer, Airwallex) with 3-stage fund-chain cross-checking, 10 tax calculators, rolling 12-month trend reports, CSV exports, and Tencent IMA policy search."
   }
 }

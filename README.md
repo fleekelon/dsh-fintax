@@ -1,4 +1,4 @@
-# dsh-fintax — 财税工作台 (v0.7.1)
+# dsh-fintax — 财税工作台 (v0.8.0)
 
 [![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
 [![CI](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml/badge.svg)](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml)
@@ -7,16 +7,17 @@
 
 <img src="https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg" width="80" alt="dsh-fintax icon">
 
-DeepSeek Harness 财税插件，在 DSH 左侧边栏提供账单离线排雷、10 项确定性交互算税、12 个月滚动风险初筛、HTML 体检单与异常 CSV 导出，以及腾讯 IMA 只读法规检索。纯 ESM，零第三方运行时依赖。
+DeepSeek Harness 财税插件，在 DSH 左侧边栏提供 **11 通道（8 大跨境销售平台 + 3 大第三方结汇通道）账单离线排雷与三段资金链交叉核对**、10 项确定性交互算税、12 个月滚动风险初筛与趋势月报、HTML 体检单与异常 CSV 导出，以及腾讯 IMA 只读法规检索。纯 ESM，零第三方运行时依赖。
 
-- **左侧边栏独立可视化工作台（`v0.7` 进化为全年滚动风控工作台，0 Token 毫秒级响应）**：
+- **左侧边栏独立可视化工作台（Braun 精密仪表风格 · `v0.8` 升级为跨境结汇资金闭环风控工作台，0 Token 毫秒级响应）**：
   - 安装后在 DSH 左侧导航栏直接点击 **「财税工作台」**（同时兼容 **「设置 → 财税工作台」**），无需手写提示词、不消耗大模型 Token；
-  - **Tab 1 · 账单离线排雷与滚动监控**。拖入多份账单或 `.zip` 原包，可归档月度汇总、按异常分级筛选并导出 HTML、Markdown 或 CSV。7,500 万是 4% 核定假设下的收入等值，500 万是一般纳税人登记参考值。两项均以账单推算的报送参考净额作初筛，正式测算需另核主体、纳税期间及对应税种数据。
+  - **Tab 1 · 账单离线排雷、三段资金核对与滚年监控**。拖入多份销售账单、结汇流水或 `.zip` 原包，自动执行 **「① 平台放款 → ② 结汇通道入账 → ③ 境内对公收汇」** 三段交叉核对（结汇流水绝不重复计入销售额）；支持自定义汇率本机持久化、月度脱敏归档（幂等防重）以及一键导出 HTML 体检单、异常 CSV 与 **12 个月滚年趋势月报**。7,500 万是 4% 核定假设下的收入等值，500 万是一般纳税人登记参考值，均作初筛参考，正式测算需另核主体、纳税期间及对应税种数据。
   - **Tab 2 · 10 项交互试算**。表单覆盖对账、出口退（免）税、退运、纳税人登记、小型微利及基础税额计算。
-  - **Tab 3 · IMA 知识库设置**：免命令行安全保存只读凭证、一键刷新并绑定默认优先库（内置 5xx 指数退避重试与 60s 只读目录缓存，深浅主题与窄屏响应式自适应）。
-- **8 大跨境平台及资金池原始账单 / `.zip` 离线合并体检（`fintax_parse_statement`）**：
-  - 支持原样导出的 **Amazon**（Date Range CSV / Flat File V2）、**TikTok Shop**（Statements 多表 `.xlsx`/`.csv`）、**Temu**（半托管/全托管）、**速卖通 AliExpress**（POP 自运营/Choice 全托管混表与 IOSS/VAT 拆分）、**Shopee 虾皮**（多工作表多币种、运费倒挂与预提税 WHT 预警）、**Shopify 独立站**、**PayPal 资金池**（自动剥离换汇流水防重复报税 + 余额坐支广告/争议预警）、**Stripe**，支持 `.zip` 免解压直拖、`UTF-16` 及 `demo:all` / `demo:v7` / `demo:full` 免文件沙盒；
-  - 用原生 `BigInt` 对账单金额做定点运算，支持 `fx_rates` 多币种人民币折算。原始订单明细留在本机内存。
+  - **Tab 3 · IMA 知识库设置**：免命令行安全保存只读凭证、一键刷新并绑定默认优先库（内置 5xx 指数退避重试、60s 只读目录缓存与首屏短词并发补查，深浅主题与窄屏响应式自适应）。
+- **11 通道跨境销售账单 + 第三方结汇流水 / `.zip` 离线合并体检（`fintax_parse_statement`）**：
+  - **8 大销售平台及收单网关**：**Amazon**（Date Range CSV / Flat File V2）、**TikTok Shop**（Statements 多表 `.xlsx`/`.csv`）、**Temu**（半托管/全托管）、**速卖通 AliExpress**（POP 自运营/Choice 全托管混表与 IOSS/VAT 拆分）、**Shopee 虾皮**（多工作表多币种、运费倒挂与预提税 WHT 预警）、**Shopify 独立站**、**PayPal 资金池**（自动剥离换汇流水防重复报税 + 余额坐支广告/争议预警）、**Stripe**；
+  - **3 大第三方结汇通道（`v0.8` 新增）**：**万里汇 WorldFirst**、**派安盈 Payoneer**、**空中云汇 Airwallex**（中英文 `.csv` / 多工作表 `.xlsx`，自动分轨绝不重复计税，识别 **个人私户提现 P0 阻断**、**未标注对公户的待核提现 P1**、**供应商/广告/云汇卡境外坐支 P1**、**跨币种单边放款缺口** 与 **同户换汇剥离**）；
+  - 支持 `.zip` 免解压直拖、`UTF-16` 及 `demo:v8` / `demo:wallets` / `demo:all` / `demo:v7` / `demo:full` 免文件沙盒；原生 `BigInt` 定点运算，原始订单明细留在本机内存。
 - **10 大代码级确定性算税与差额桥接引擎（`fintax_calc`，免配 IMA 亦可离线使用）**：
   1. **四层口径桥接（`platform_tax_reconcile`）**。对照平台报送、财务会计、增值税与出口、企业所得税。资金桥接单列，放款差额 = 实际放款 − 理论放款。申报比对差额 = 报送总额或调整后的参考额 − 已申报销售额。
   2. **供应商开票加点毛利临界测算（`export_invoice_breakeven`）**；
@@ -30,9 +31,9 @@ DeepSeek Harness 财税插件，在 DSH 左侧边栏提供账单离线排雷、1
   10. **增值税价税分离（`vat`）**。
 - **政策引证问答 & 监管代码决策树**：只读检索你 IMA 知识库里的政策原文与 SOP，回答附真实来源与文号。
 
-## 实测效果与独立工作台实机截图（v0.7.1）
+## 实测效果与独立工作台实机截图（v0.8.0）
 
-1. **DSH 侧边栏独立财税工作台（Braun 精密仪表风格）— 8 大平台原始账单 / `.zip` 拖拽排雷、12 个月双指针红线雷达与异常 CSV 导出**：
+1. **DSH 侧边栏独立财税工作台（Braun 精密仪表风格）— 11 通道离线排雷、三段资金链交叉核对、12 个月双指针红线雷达与趋势月报**：
 
 ![侧边栏财税工作台实机截图](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/statement-radar.png)
 
@@ -78,7 +79,7 @@ dsh plugin --profile <你的profile> add github:fleekelon/dsh-fintax
 
 | 工具 | 用途 |
 |---|---|
-| `fintax_parse_statement` | 本地离线解析 8 大跨境平台及资金池（Amazon / TikTok Shop / Temu / 速卖通 AliExpress / Shopee / Shopify / PayPal / Stripe）原始账单及 `.zip` 包（支持 `demo:all` / `demo:v7` / `demo:full` 免文件体验），输出多币种合并对账、异常雷达与可打印 HTML/MD 诊断书及排雷清单 CSV |
+| `fintax_parse_statement` | 本地离线解析 8 大销售平台（Amazon / TikTok Shop / Temu / 速卖通 / Shopee / Shopify / PayPal / Stripe）与 3 大第三方结汇通道（万里汇 WorldFirst / 派安盈 Payoneer / 空中云汇 Airwallex）原始账单及 `.zip` 包（支持 `demo:v8` / `demo:wallets` / `demo:all` / `demo:v7` / `demo:full`），自动执行三段资金链交叉核对（绝不重复计税）、输出异常雷达与可打印 HTML/MD 诊断书及排雷 CSV |
 | `fintax_calc` | 10 场景确定性试算与对账：`platform_tax_reconcile` / `export_invoice_breakeven` / `cbec_return_duty_exempt` / `export_rebate_manufacturer` / `vat_taxpayer_threshold` / `cbec_assessed_cit` / `export_rebate` / `annual_bonus_iit` / `cross_border_import` / `vat` |
 | `ima_list_kbs` | 列出你的 IMA 知识库并标识已绑定的默认优先库 |
 | `ima_search` | 在默认或指定知识库内搜索政策原文与底稿。首屏长问题少于两条时，并发补查最多三组财税短词，去重后按命中频次融合 |

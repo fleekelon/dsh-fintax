@@ -2,6 +2,24 @@
 
 All notable changes to `dsh-fintax` will be documented in this file.
 
+## [0.8.0] - 2026-11-20
+
+### Added
+- **3 Third-Party Settlement Wallet Parsers (`lib/platforms_v8.js`)** — expanding offline coverage from 8 to **11 channels (8 sales platforms + 3 settlement wallets)**:
+  - **WorldFirst (万里汇)**, **Payoneer (派安盈)**, and **Airwallex (空中云汇)** (`.csv` / multi-sheet `.xlsx`, CN/EN headers, Chinese currency normalization including `人民币 → CNY`, `UNKNOWN` guard instead of silent USD fallback, and `Total/合计` summary-row filtering).
+  - Strict role isolation (`role: 'settlement_wallet'`): settlement wallets are **never double-counted into sales tax reporting gross revenue**, and instead feed a **3-Stage Fund-Chain Cross-Check (`fundChain`)**: `① Platform Payout → ② Wallet Inbound (with per-currency single-sided mismatch alerts) → ③ Corporate Repatriation Rate (%)`, separating **Personal-Account Withdrawals (P0 blocking, zero corporate-keyword bypass)**, **Unverified Beneficiary Withdrawals (P1, excluded from confirmed corporate rate)**, **Offshore Direct Spend (P1 supplier/ads/card)**, **Signed Return/Freeze Flows**, and **Internal FX Conversions**.
+  - Added zero-file sandboxes `demo:v8` / `demo:chain` (full 3-sales + 3-wallet 3-stage cross-check) and `demo:wallets` (wallet-only standalone audit mode).
+- **Persisted Custom FX Rate Presets (`lib/ima.js`, `index.js`, `client.js`)**:
+  - Save/reset custom FX rates locally in `~/.config/ima/fintax_config.json` (`0o600`, atomic write, strict type/range whitelist, preserves disk `defaultKbId` even under `IMA_DEFAULT_KB_ID` env override), with automatic recalculation and draft protection in the workbench.
+- **Printable 12-Month Rolling Trend Report (`lib/report.js`, `GET /api/fintax/history/report`, `client.js`)**:
+  - Standalone A4 printable Braun-styled HTML report with dual-series inline SVG chart (net sales + actual payout bars), 75M/5M dual threshold progress meters, rolling-window KPI ledger, and `@media print` pagination rules.
+
+### Fixed & Hardened
+- Fixed `computeRolling12m()` missing monthly `payoutCny` aggregation so the SVG payout series renders accurately.
+- Added idempotent deduplication in `saveSnapshot()` for identical month + label + platform-set saves to prevent accidental double-counting on rolling thresholds, while supporting refund-only months.
+- Fixed `demo:amazon` missing `"other"` column and `parseAmazonDateRange` Transfer/Reserve check order (eliminating false P0 horizontal imbalance on built-in demo).
+- Hardened cross-platform header mutual exclusion (`Airwallex` / `WorldFirst` / `Payoneer` vs `Shopify` / `PayPal` / `Temu`), unidirectional Net conservation check, `wallet_only` LCD/bridge safeguards, dynamic report section numbering, and HTTP `400`/`413` body-error status codes.
+
 ## [0.7.1] - 2026-11-19
 
 - **Braun Precision Instrument Workbench UI (`client.js`)**: Rebuilt the 3-Tab DSH sidebar workbench in a Dieter Rams / Braun industrial aesthetic — matte oat-gray aluminum light chassis & Braun Atelier dark chassis, recessed olive-green LCD readout, dynamic 101-tick SVG dual analog needle gauges (75M cliff & 5M VAT threshold), 8-adapter status indicator strip, and keep-alive tab switching.

@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-fintax',
   factory(require) {
     const React = require('react')
-    const { createElement: h, useState, useEffect, useCallback } = React
+    const { createElement: h, useState, useEffect, useCallback, useRef } = React
 
     const NS = 'settings.fintax'
     const PANEL_ID = 'dsh-fintax'
@@ -41,17 +41,21 @@ window.__ModuleLoader__.load({
         defaultKbBound: '已绑定 ',
         defaultKbNone: '未绑定默认库',
         dropTitle: '拖入原始结算账单 / .ZIP',
-        dropSub: '支持 8 平台（Amazon / TikTok / Temu / 速卖通 / Shopee / Shopify / PayPal / Stripe）· 原始明细 100% 留在本机内存',
+        dropSub: '支持 8 大销售平台 + 3 大结汇通道（万里汇 / 派安盈 / 空中云汇）· 原始明细 100% 留在本机内存',
         pickFiles: '拖入账单 / .ZIP',
         runDemo: '经典三平台沙盒',
         runDemoV7: 'v0.7 新三平台沙盒',
+        runDemoV8: 'v0.8 全链路结汇沙盒',
         parsing: '解析中…',
         recalcBtn: '按汇率重算总对账',
+        saveFxDefault: '保存为默认汇率',
+        resetFxDefault: '恢复内置参考汇率',
         exportHtml: '导出老板 HTML 体检单',
         exportMd: '导出 Markdown (.md)',
         exportCsv: '导出异常排雷 CSV',
+        exportTrendHtml: '导出滚年趋势月报',
         declaredLabel: '已申报增值税/出口销售额（元）',
-        platformAuto: '自动识别（8 平台）',
+        platformAuto: '自动识别（11 通道）',
         credTitle: '1. 腾讯 IMA OpenAPI 只读凭证',
         credDesc: '前往 https://ima.qq.com/agent-interface 获取 Client ID 与 API Key。密钥只写不回显明文，仅作为请求头发送至官方 ima.qq.com。',
         cidLabel: 'Client ID',
@@ -100,17 +104,21 @@ window.__ModuleLoader__.load({
         defaultKbBound: 'KB: ',
         defaultKbNone: 'No default KB',
         dropTitle: 'Drop statements / .ZIP',
-        dropSub: 'Supports 8 platforms (Amazon, TikTok, Temu, AliExpress, Shopee, Shopify, PayPal, Stripe) · 100% local in-memory parsing',
+        dropSub: 'Supports 8 sales platforms + 3 settlement wallets (WorldFirst, Payoneer, Airwallex) · 100% local in-memory parsing',
         pickFiles: 'Drop / Pick .ZIP',
         runDemo: 'Classic 3-platform demo',
         runDemoV7: 'v0.7 PayPal/AE/Shopee demo',
+        runDemoV8: 'v0.8 3-stage fund chain demo',
         parsing: 'Parsing…',
         recalcBtn: 'Recalculate FX',
+        saveFxDefault: 'Save default FX',
+        resetFxDefault: 'Reset FX',
         exportHtml: 'Export HTML Report',
         exportMd: 'Export Markdown',
         exportCsv: 'Export Anomaly CSV',
+        exportTrendHtml: 'Export 12M Trend HTML',
         declaredLabel: 'Declared VAT / Export Sales (CNY)',
-        platformAuto: 'Auto (8 platforms)',
+        platformAuto: 'Auto (11 channels)',
         credTitle: '1. Tencent IMA OpenAPI Credentials',
         credDesc: 'Get Client ID & API Key at https://ima.qq.com/agent-interface. Write-only, sent exclusively to ima.qq.com.',
         cidLabel: 'Client ID',
@@ -145,6 +153,7 @@ window.__ModuleLoader__.load({
     }
 
     const ADAPTERS = ['PayPal', 'AliExpress', 'Shopee', 'Amazon', 'TikTok Shop', 'Temu', 'Shopify', 'Stripe']
+    const WALLET_ADAPTERS = ['WorldFirst', 'Payoneer', 'Airwallex']
 
     const CALC_SCENARIOS = [
       {
@@ -526,7 +535,7 @@ window.__ModuleLoader__.load({
       .ftx-gval { margin-top: -8px; font: 700 22px/1.1 var(--ftx-mono); letter-spacing: -0.8px; }
       .ftx-gfoot { font-size: 10.5px; color: var(--ftx-mut); margin-top: 2px; }
       .ftx-gfoot i { font-style: normal; color: var(--ftx-orange); }
-      .ftx-lower { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+      .ftx-lower { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; }
       .ftx-block { border-top: 2px solid var(--ftx-line-strong); padding-top: 13px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
       .ftx-bhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
       .ftx-bhead h2 { font-size: 18px; font-weight: 700; letter-spacing: -0.4px; margin: 0; }
@@ -567,6 +576,14 @@ window.__ModuleLoader__.load({
       .ftx-adp i { width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--ftx-mut); display: inline-block; }
       .ftx-adp.used { color: var(--ftx-ink); font-weight: 700; }
       .ftx-adp.used i { background: var(--ftx-orange); border-color: var(--ftx-orange); }
+      .ftx-adp.wallet.used i { background: var(--ftx-ok); border-color: var(--ftx-ok); }
+      .ftx-chain { background: var(--ftx-chassis); border: 1px solid var(--ftx-chassis-bd); border-radius: 6px; padding: 14px 18px; display: flex; flex-direction: column; gap: 11px; }
+      .ftx-chain-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); gap: 10px; }
+      .ftx-chain-cell { background: var(--ftx-surface); border: 1px solid var(--ftx-line); border-radius: 4px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+      .ftx-chain-cell.ok { border-color: var(--ftx-ok); }
+      .ftx-chain-cell.danger { border-color: var(--ftx-orange); background: var(--ftx-gap-bg); }
+      .ftx-chain-bar { height: 9px; border-radius: 2px; overflow: hidden; display: flex; background: var(--ftx-line); gap: 1px; }
+      .ftx-tag-w { display: inline-block; font: 600 10px var(--ftx-mono); padding: 1px 5px; border-radius: 2px; background: var(--ftx-th-bg); color: var(--ftx-ok); border: 1px solid var(--ftx-line); margin-left: 5px; vertical-align: middle; }
     `
 
     function ensureStyles() {
@@ -639,12 +656,14 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function StatementRadarTab({ t, onCopyText, copiedKey, onJumpToCalc }) {
+    function StatementRadarTab({ t, status, refreshStatus, onCopyText, copiedKey, onJumpToCalc }) {
       const [dragging, setDragging] = useState(false)
       const [platform, setPlatform] = useState('auto')
       const [uploadedFiles, setUploadedFiles] = useState([])
       const [demoMode, setDemoMode] = useState('')
       const [fxMap, setFxMap] = useState({ USD: '7.18', EUR: '7.82', GBP: '9.15', AUD: '4.72', MYR: '1.62', SGD: '5.36' })
+      const fxDirtyRef = useRef(false)
+      const [fxSaveMsg, setFxSaveMsg] = useState('')
       const [declaredCny, setDeclaredCny] = useState('')
       const [busy, setBusy] = useState(false)
       const [err, setErr] = useState('')
@@ -658,6 +677,19 @@ window.__ModuleLoader__.load({
       const [snapLabel, setSnapLabel] = useState('')
       const [snapMonth, setSnapMonth] = useState('')
       const [snapMsg, setSnapMsg] = useState('')
+
+      // 载入本机持久化的自定义汇率预设（仅在用户尚未手动修改草稿时同步，防止晚到响应覆盖编辑）
+      useEffect(() => {
+        if (fxDirtyRef.current) return
+        const saved = status?.customFxRates
+        if (saved && typeof saved === 'object' && Object.keys(saved).length > 0) {
+          setFxMap((prev) => {
+            const next = { ...prev }
+            for (const [k, v] of Object.entries(saved)) next[k] = String(v)
+            return next
+          })
+        }
+      }, [status?.customFxRates])
 
       const refreshHistory = useCallback(async () => {
         try {
@@ -674,7 +706,8 @@ window.__ModuleLoader__.load({
         setSnapMsg('')
         try {
           const useFx = fxOverrides || fxMap
-          const numericFx = {}
+          // 先注入内置参考汇率兜底，再用用户配置覆盖，避免首次解析新币种因缺汇率需点两次按钮
+          const numericFx = { ...DEFAULT_FX }
           for (const [k, v] of Object.entries(useFx)) {
             const n = Number(v)
             if (Number.isFinite(n) && n > 0) numericFx[k] = n
@@ -696,7 +729,7 @@ window.__ModuleLoader__.load({
           setSnapLabel(`${firstPeriod} ${plats.join('+')} 体检`)
           const nextFx = { ...useFx }
           for (const s of res.summaries || []) {
-            if (s.currency && s.currency !== 'RMB' && s.currency !== 'CNY' && !nextFx[s.currency]) {
+            if (s.currency && s.currency !== 'RMB' && s.currency !== 'CNY' && s.currency !== 'UNKNOWN' && !nextFx[s.currency]) {
               nextFx[s.currency] = String(DEFAULT_FX[s.currency] || 7.0)
             }
           }
@@ -707,6 +740,50 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }, [fxMap, declaredCny, platform])
+
+      const handleSaveFxRates = async () => {
+        setFxSaveMsg('')
+        try {
+          const clean = {}
+          for (const [k, v] of Object.entries(fxMap)) {
+            const n = Number(v)
+            if (Number.isFinite(n) && n > 0) clean[k] = n
+          }
+          const res = await callApi('/settings', { method: 'POST', body: JSON.stringify({ customFxRates: clean }) })
+          fxDirtyRef.current = false
+          if (typeof refreshStatus === 'function') refreshStatus(res)
+          setFxSaveMsg('默认汇率已保存 ✓')
+          if (data) await runParse({ files: uploadedFiles, demo: demoMode, fxOverrides: fxMap })
+        } catch (e) {
+          setFxSaveMsg(`保存失败：${e.message}`)
+        }
+      }
+
+      const handleResetFxRates = async () => {
+        setFxSaveMsg('')
+        try {
+          const res = await callApi('/settings', { method: 'POST', body: JSON.stringify({ customFxRates: null }) })
+          const baseFx = { USD: '7.18', EUR: '7.82', GBP: '9.15', AUD: '4.72', MYR: '1.62', SGD: '5.36' }
+          fxDirtyRef.current = false
+          setFxMap(baseFx)
+          if (typeof refreshStatus === 'function') refreshStatus(res)
+          setFxSaveMsg('已恢复内置参考汇率')
+          if (data) await runParse({ files: uploadedFiles, demo: demoMode, fxOverrides: baseFx })
+        } catch (e) {
+          setFxSaveMsg(`重置失败：${e.message}`)
+        }
+      }
+
+      const handleExportTrendReport = async () => {
+        try {
+          const res = await callApi('/history/report')
+          if (res?.reportHtml) {
+            downloadText(res.reportHtml, '跨境财税12个月滚动风控趋势月报.html', 'text/html;charset=utf-8')
+          }
+        } catch (e) {
+          setErr(`导出趋势月报失败：${e.message}`)
+        }
+      }
 
       const handleFiles = async (fileList) => {
         const arr = Array.from(fileList || [])
@@ -780,17 +857,24 @@ window.__ModuleLoader__.load({
       const anomPlatforms = [...new Set(orderedAnoms.map((a) => a.platform).filter(Boolean))]
       const loadedPlats = new Set((data?.summaries || []).map((s) => s.platform))
       const totalRows = (data?.summaries || []).reduce((acc, s) => acc + (s.rawRowCount || 0), 0)
-      const activeCcys = [...new Set((data?.summaries || []).map((s) => s.currency).filter((c) => c && c !== 'RMB' && c !== 'CNY'))]
+      const sheetCcys = [...new Set((data?.summaries || []).map((s) => s.currency).filter((c) => c && c !== 'RMB' && c !== 'CNY' && c !== 'UNKNOWN'))]
+      const activeCcys = sheetCcys.length > 0 ? sheetCcys : Object.keys(fxMap)
 
       const r12 = histState?.rolling12m
       const hasHistory = Boolean(r12?.snapshotCount)
       const consTotals = data?.consolidated?.ready ? data.consolidated.totals : null
+      const fundChain = data?.consolidated?.fundChain || null
+      const isWalletOnly = Boolean(fundChain && !fundChain.hasSalesEvidence)
       const gaugeNetCny = hasHistory ? r12.totalNetSalesCny : (consTotals?.netSalesCny || 0)
       const pct75 = hasHistory ? r12.cliff75mPct : (consTotals ? Math.round((consTotals.netSalesCny / 75_000_000) * 10000) / 100 : 0)
       const pct5 = hasHistory ? r12.threshold5mPct : (consTotals ? Math.round((consTotals.netSalesCny / 5_000_000) * 10000) / 100 : 0)
-      const declDiag = data?.consolidated?.ready ? data.consolidated.reconcile?.declarationDiagnosis : null
+      const declDiag = data?.consolidated?.ready && !isWalletOnly ? data.consolidated.reconcile?.declarationDiagnosis : null
 
       const jumpBridge = () => {
+        if (isWalletOnly) {
+          setErr('当前为纯结汇通道独立体检模式（不含销售报送额），请合并拖入电商平台结算单后再一键带入四层桥接精算。')
+          return
+        }
         if (!consTotals) return onJumpToCalc('platform_tax_reconcile', {})
         onJumpToCalc('platform_tax_reconcile', {
           reportedGrossRevenue: String(consTotals.grossCny),
@@ -829,24 +913,31 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'ftx-inst-left' },
-            h('div', { className: 'ftx-inst-head' }, h('span', null, '账单合并对账'), h('small', null, 'CNY / LOCAL')),
+            h('div', { className: 'ftx-inst-head' }, h('span', null, isWalletOnly ? '结汇通道独立排雷' : '账单合并对账'), h('small', null, isWalletOnly ? 'WALLET / LOCAL' : 'CNY / LOCAL')),
             h(
               'div',
               { className: 'ftx-lcd' },
-              h('div', { className: 'ftx-lcd-lbl' }, h('span', null, '合并报送参考毛额'), h('span', { className: 'ftx-mono', style: { fontSize: 10.5 } }, consTotals ? 'CNY' : 'STANDBY')),
+              h('div', { className: 'ftx-lcd-lbl' }, h('span', null, isWalletOnly ? '结汇通道入账折合（不计入销售）' : '合并报送参考毛额'), h('span', { className: 'ftx-mono', style: { fontSize: 10.5 } }, isWalletOnly ? 'WALLET ONLY' : consTotals ? 'CNY' : 'STANDBY')),
               h(
                 'div',
                 { className: 'ftx-lcd-big' },
                 h('span', { className: 'unit' }, '¥'),
-                consTotals ? Math.round(consTotals.grossCny).toLocaleString() : '0',
+                isWalletOnly
+                  ? Math.round((fundChain.stage2WalletInboundCny || 0) + (fundChain.stage2OtherInboundCny || 0)).toLocaleString()
+                  : consTotals ? Math.round(consTotals.grossCny).toLocaleString() : '0',
               ),
               !data && h('div', { style: { fontSize: 11.5, color: 'var(--ftx-lcd-ink)', opacity: 0.7, marginTop: 4 } }, '拖入原始账单/.ZIP，或点击下方沙盒按钮 10ms 体验全链路排雷'),
+              isWalletOnly && h('div', { style: { fontSize: 11, color: 'var(--ftx-lcd-ink)', opacity: 0.82, marginTop: 4 } }, '已严格排除出销售报送额 · 合并拖入电商账单可激活三段核对'),
             ),
             h(
               'div',
               { className: 'ftx-metrics' },
-              h('div', null, h('label', null, '合并净销售额'), h('b', null, `¥${consTotals ? Math.round(consTotals.netSalesCny).toLocaleString() : '0'}`)),
-              h('div', null, h('label', null, '平台佣金及履约费'), h('b', null, `¥${consTotals ? Math.round(consTotals.feesCny).toLocaleString() : '0'}`)),
+              isWalletOnly
+                ? h('div', null, h('label', null, '已确认对公结汇'), h('b', null, `¥${Math.round(fundChain.stage3CorporateRepatriatedCny || 0).toLocaleString()}`))
+                : h('div', null, h('label', null, '合并净销售额'), h('b', null, `¥${consTotals ? Math.round(consTotals.netSalesCny).toLocaleString() : '0'}`)),
+              isWalletOnly
+                ? h('div', null, h('label', null, '结汇通道手续费'), h('b', null, `¥${Math.round(fundChain.walletFeesCny || 0).toLocaleString()}`))
+                : h('div', null, h('label', null, '平台佣金及履约费'), h('b', null, `¥${consTotals ? Math.round(consTotals.feesCny).toLocaleString() : '0'}`)),
             ),
             h(
               'div',
@@ -884,9 +975,9 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginTop: 10 } },
-              data && consTotals && h('input', { type: 'month', value: snapMonth, onChange: (e) => setSnapMonth(e.target.value), className: 'ftx-input', style: { padding: '3px 6px', fontSize: 11.5 } }),
-              data && consTotals && h('input', { type: 'text', value: snapLabel, onChange: (e) => setSnapLabel(e.target.value), placeholder: '快照备注', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 110px', minWidth: 95 } }),
-              data && consTotals && h('button', { type: 'button', className: 'ftx-btn-sm', onClick: handleSaveSnapshot }, '归档至12个月滚年监控'),
+              data && consTotals && (consTotals.grossCny > 0 || consTotals.netSalesCny > 0) && h('input', { type: 'month', value: snapMonth, onChange: (e) => setSnapMonth(e.target.value), className: 'ftx-input', style: { padding: '3px 6px', fontSize: 11.5 } }),
+              data && consTotals && (consTotals.grossCny > 0 || consTotals.netSalesCny > 0) && h('input', { type: 'text', value: snapLabel, onChange: (e) => setSnapLabel(e.target.value), placeholder: '快照备注', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 110px', minWidth: 95 } }),
+              data && consTotals && (consTotals.grossCny > 0 || consTotals.netSalesCny > 0) && h('button', { type: 'button', className: 'ftx-btn-sm', onClick: handleSaveSnapshot }, '归档至12个月滚年监控'),
               snapMsg && h('span', { style: { fontSize: 11.5, fontWeight: 700, color: snapMsg.includes('失败') ? 'var(--ftx-orange)' : 'var(--ftx-ok)' } }, snapMsg),
               hasHistory &&
                 h(
@@ -907,7 +998,7 @@ window.__ModuleLoader__.load({
                 'div',
                 { key: ccy, style: { display: 'flex', flexDirection: 'column', gap: 3 } },
                 h('label', { style: { fontSize: 11, color: 'var(--ftx-mut)', fontWeight: 600 } }, `${ccy} 折人民币汇率`),
-                h('input', { type: 'number', step: '0.01', value: fxMap[ccy] ?? '', onChange: (e) => setFxMap({ ...fxMap, [ccy]: e.target.value }), className: 'ftx-input', style: { width: 96 } }),
+                h('input', { type: 'number', step: '0.01', value: fxMap[ccy] ?? '', onChange: (e) => { fxDirtyRef.current = true; setFxMap({ ...fxMap, [ccy]: e.target.value }) }, className: 'ftx-input', style: { width: 96 } }),
               ),
             ),
             h(
@@ -917,6 +1008,9 @@ window.__ModuleLoader__.load({
               h('input', { type: 'number', placeholder: '如 330000', value: declaredCny, onChange: (e) => setDeclaredCny(e.target.value), className: 'ftx-input', style: { width: 165 } }),
             ),
             h('button', { type: 'button', className: 'ftx-btn-sm on', style: { height: 32, padding: '0 14px' }, disabled: busy || !data, onClick: () => runParse({ files: uploadedFiles, demo: demoMode }) }, t.recalcBtn),
+            h('button', { type: 'button', className: 'ftx-btn-sm', style: { height: 32 }, onClick: handleSaveFxRates }, t.saveFxDefault),
+            h('button', { type: 'button', className: 'ftx-btn-sm', style: { height: 32 }, onClick: handleResetFxRates }, t.resetFxDefault),
+            fxSaveMsg && h('span', { style: { fontSize: 11.5, fontWeight: 700, color: fxSaveMsg.includes('失败') ? 'var(--ftx-orange)' : 'var(--ftx-ok)', alignSelf: 'center' } }, fxSaveMsg),
           ),
         showHistList && hasHistory &&
           h(
@@ -928,7 +1022,8 @@ window.__ModuleLoader__.load({
               h('strong', { style: { fontSize: 13 } }, `12 个月滚动红线追踪雷达（${r12.windowStart} ~ ${r12.windowEnd} · ${r12.snapshotCount} 份归档快照）`),
               h(
                 'div',
-                { style: { display: 'flex', gap: 6 } },
+                { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                h('button', { type: 'button', className: 'ftx-btn-sm on', onClick: handleExportTrendReport }, t.exportTrendHtml),
                 h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => onJumpToCalc('vat_taxpayer_threshold', { rolling12mTaxableSales: '', projectedAnnualGrossSales: '' }, false) }, '核对应税销售额与登记'),
                 h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => onJumpToCalc('cbec_assessed_cit', {}, false) }, '按主体试算 4% 核定'),
               ),
@@ -942,6 +1037,90 @@ window.__ModuleLoader__.load({
               ),
             ),
           ),
+        // ── v0.8 三段资金链路交叉核对仪表卡（仅当存在结汇通道流水时展示）──
+        data?.consolidated?.fundChain && (() => {
+          const fc = data.consolidated.fundChain
+          const totalIn = (fc.stage2WalletInboundCny || 0) + (fc.stage2OtherInboundCny || 0)
+          const hasDenom = totalIn > 0
+          const pCorp = hasDenom ? Math.min(100, (fc.stage3CorporateRepatriatedCny / totalIn) * 100) : 0
+          const pPers = hasDenom ? Math.min(100 - pCorp, (fc.stage3PersonalWithdrawCny / totalIn) * 100) : 0
+          const spendAndUnv = (fc.directSpendCny || 0) + (fc.stage3UnverifiedWithdrawCny || 0)
+          const pSpend = hasDenom ? Math.min(100 - pCorp - pPers, (spendAndUnv / totalIn) * 100) : 0
+          const retAndFee = (fc.retainedOffshoreCny || 0) + (fc.walletFeesCny || 0) + (fc.frozenOutflowCny || 0)
+          const pRet = hasDenom ? Math.min(100 - pCorp - pPers - pSpend, (retAndFee / totalIn) * 100) : 0
+          const hasGapDanger = fc.hasSalesEvidence && (Math.abs(fc.stage1to2GapCny || 0) > 100 || (fc.byCurrency || []).some((c) => Math.abs((c.stage1to2Gap || 0) * c.fx) > 100))
+          return h(
+            'section',
+            { className: 'ftx-chain' },
+            h(
+              'div',
+              { className: 'ftx-bhead' },
+              h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' } }, h('h2', null, '三段资金链路交叉核对'), h('span', { style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, '平台放款 → 结汇通道入账 → 境内对公收汇（结汇流水绝不重复计税）')),
+              h('span', { className: 'ftx-secmeta' }, fc.hasSalesEvidence ? '3-STAGE / ACTIVE' : 'WALLET ONLY'),
+            ),
+            h(
+              'div',
+              { className: 'ftx-chain-grid' },
+              h(
+                'div',
+                { className: 'ftx-chain-cell' },
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '① 销售平台实际放款'),
+                h('b', { className: 'ftx-mono', style: { fontSize: fc.hasSalesEvidence ? 18 : 14, color: fc.hasSalesEvidence ? 'var(--ftx-ink)' : 'var(--ftx-mut)' } }, fc.hasSalesEvidence ? `¥${Math.round(fc.stage1PlatformPayoutCny).toLocaleString()}` : '待导入销售账单'),
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, fc.hasSalesEvidence ? `${fc.salesSheetCount} 份销售账单汇总` : '合并拖入电商账单激活比对'),
+              ),
+              h(
+                'div',
+                { className: `ftx-chain-cell${hasGapDanger ? ' danger' : ''}` },
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '② 结汇通道平台入账'),
+                h('b', { className: 'ftx-mono', style: { fontSize: 18 } }, `¥${Math.round(fc.stage2WalletInboundCny).toLocaleString()}`),
+                h(
+                  'span',
+                  { className: 'ftx-mono', style: { fontSize: 11, color: hasGapDanger ? 'var(--ftx-orange)' : 'var(--ftx-ok)', fontWeight: 700 } },
+                  fc.hasSalesEvidence
+                    ? `一/二段差 ${fc.stage1to2GapCny >= 0 ? '+' : ''}¥${Math.round(fc.stage1to2GapCny).toLocaleString()}${fc.stage2OtherInboundCny > 0 ? ` · 另其他 ¥${Math.round(fc.stage2OtherInboundCny).toLocaleString()}` : ''}`
+                    : `${fc.walletCount} 份结汇流水${fc.stage2OtherInboundCny > 0 ? ` · 其他入账 ¥${Math.round(fc.stage2OtherInboundCny).toLocaleString()}` : ''}`,
+                ),
+              ),
+              h(
+                'div',
+                { className: 'ftx-chain-cell ok' },
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '③ 境内对公合规结汇'),
+                h('b', { className: 'ftx-mono', style: { fontSize: 18, color: 'var(--ftx-ok)' } }, `¥${Math.round(fc.stage3CorporateRepatriatedCny).toLocaleString()}`),
+                h('span', { className: 'ftx-mono', style: { fontSize: 11, color: 'var(--ftx-ok)', fontWeight: 700 } }, fc.corporateRepatriationRatePct !== null ? `对公合规回流率 ${fc.corporateRepatriationRatePct}%` : '对公回流率 待核'),
+              ),
+              h(
+                'div',
+                { className: `ftx-chain-cell${fc.stage3PersonalWithdrawCny > 0 || (fc.stage3UnverifiedWithdrawCny || 0) > 0 ? ' danger' : ''}` },
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '私户 P0 / 待核 / 坐支 P1'),
+                h('b', { className: 'ftx-mono', style: { fontSize: 15, color: fc.stage3PersonalWithdrawCny > 0 ? 'var(--ftx-orange)' : 'var(--ftx-ink)' } }, `¥${Math.round(fc.stage3PersonalWithdrawCny).toLocaleString()} / ¥${Math.round(fc.stage3UnverifiedWithdrawCny || 0).toLocaleString()} / ¥${Math.round(fc.directSpendCny).toLocaleString()}`),
+                h('span', { className: 'ftx-mono', style: { fontSize: 11, color: 'var(--ftx-mut)' } }, `滞留境外 ¥${Math.round(fc.retainedOffshoreCny).toLocaleString()} · 费 ¥${Math.round(fc.walletFeesCny).toLocaleString()}`),
+              ),
+            ),
+            hasDenom &&
+              h(
+                'div',
+                { className: 'ftx-chain-bar', title: `对公 ${pCorp.toFixed(1)}% / 私户 ${pPers.toFixed(1)}% / 待核与坐支 ${pSpend.toFixed(1)}% / 滞留与费 ${pRet.toFixed(1)}%` },
+                pCorp > 0 && h('div', { style: { width: `${pCorp}%`, background: 'var(--ftx-ok)' } }),
+                pPers > 0 && h('div', { style: { width: `${pPers}%`, background: 'var(--ftx-orange)' } }),
+                pSpend > 0 && h('div', { style: { width: `${pSpend}%`, background: '#d97706' } }),
+                pRet > 0 && h('div', { style: { width: `${pRet}%`, background: 'var(--ftx-mut)', opacity: 0.45 } }),
+              ),
+            fc.byCurrency && fc.byCurrency.length > 0 &&
+              h(
+                'div',
+                { style: { display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: 11.5, color: 'var(--ftx-mut)' } },
+                ...fc.byCurrency.map((c) =>
+                  h(
+                    'span',
+                    { key: c.currency, className: 'ftx-mono', style: { padding: '2px 7px', border: '1px solid var(--ftx-line)', borderRadius: 3, background: 'var(--ftx-surface)' } },
+                    fc.hasSalesEvidence
+                      ? `${c.currency}: 放款 ${c.platformPayout.toLocaleString()} → 入账 ${c.walletInbound.toLocaleString()} (${c.stage1to2Gap >= 0 ? '+' : ''}${c.stage1to2Gap.toLocaleString()}) → 对公 ${c.corporateWithdraw.toLocaleString()}`
+                      : `${c.currency}: 入账 ${c.walletInbound.toLocaleString()} → 对公 ${c.corporateWithdraw.toLocaleString()}`,
+                  ),
+                ),
+              ),
+          )
+        })(),
         // ── 中段双栏审计区：左 原币对账 / 右 异常雷达 ──
         h(
           'div',
@@ -954,7 +1133,7 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--ftx-mut)' } },
-              h('span', null, data ? `${data.summaries.length} 个站点 · 逐表 BigInt 定点核验` : '支持 8 大跨境平台及 .ZIP 压缩包直拖'),
+              h('span', null, data ? `${data.summaries.length} 份账单 · 逐表 BigInt 定点核验` : '支持 8 销售平台 + 3 结汇通道及 .ZIP 直拖'),
               h(
                 'select',
                 { value: platform, onChange: (e) => setPlatform(e.target.value), className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5 } },
@@ -963,6 +1142,9 @@ window.__ModuleLoader__.load({
                 h('option', { value: 'temu' }, 'Temu'), h('option', { value: 'aliexpress' }, '速卖通 AliExpress'),
                 h('option', { value: 'shopee' }, 'Shopee 虾皮'), h('option', { value: 'shopify' }, 'Shopify'),
                 h('option', { value: 'paypal' }, 'PayPal'), h('option', { value: 'stripe' }, 'Stripe'),
+                h('option', { value: 'worldfirst' }, '万里汇 WorldFirst'),
+                h('option', { value: 'payoneer' }, '派安盈 Payoneer'),
+                h('option', { value: 'airwallex' }, '空中云汇 Airwallex'),
               ),
             ),
             data
@@ -972,20 +1154,46 @@ window.__ModuleLoader__.load({
                   h(
                     'table',
                     { className: 'ftx-tbl' },
-                    h('thead', null, h('tr', null, h('th', null, '平台 · 站点'), h('th', null, '原币参考毛额'), h('th', null, '实际放款'), h('th', null, '资金核验'))),
+                    h('thead', null, h('tr', null, h('th', null, '通道 · 站点'), h('th', null, '参考毛额 / 通道入账'), h('th', null, '放款 / 对公回流'), h('th', null, '资金核验'))),
                     h(
                       'tbody',
                       null,
-                      ...data.summaries.map((s, idx) =>
-                        h(
+                      ...data.summaries.map((s, idx) => {
+                        const isW = s.role === 'settlement_wallet' && s.walletMetrics
+                        return h(
                           'tr',
                           { key: idx },
-                          h('td', null, h('strong', null, `${s.platform} · ${s.site}`), h('div', { style: { fontSize: 10.5, color: 'var(--ftx-mut)', fontFamily: 'var(--ftx-mono)' } }, `${s.period} · 佣金 ${s.totalFees}`)),
-                          h('td', null, `${s.currency} ${s.taxReportingGrossRef}`),
-                          h('td', null, s.actualPayout, Number(s.actualPayout) !== 0 && h('div', { title: t.payoutDiffHelp, style: { fontSize: 10.5, color: 'var(--ftx-mut)' } }, `${t.payoutDiff} ${s.statementPayoutDiff}`)),
-                          h('td', null, h('span', { style: { color: s.horizontalBalanced ? 'var(--ftx-ok)' : 'var(--ftx-orange)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: 'inherit' } }, s.horizontalBalanced ? h(Icon, { kind: 'check', size: 12 }) : '!', s.horizontalBalanced ? '守恒' : `差 ${s.horizontalDiffTotal}`)),
-                        ),
-                      ),
+                          h(
+                            'td',
+                            null,
+                            h('strong', null, `${s.platform} · ${s.site}`),
+                            isW && h('span', { className: 'ftx-tag-w' }, '结汇'),
+                            h('div', { style: { fontSize: 10.5, color: 'var(--ftx-mut)', fontFamily: 'var(--ftx-mono)' } }, isW ? `${s.period} · 费 ${s.walletMetrics.walletFees}` : `${s.period} · 佣金 ${s.totalFees}`),
+                          ),
+                          h('td', null, isW ? `${s.currency} ${s.walletMetrics.platformInbound}` : `${s.currency} ${s.taxReportingGrossRef}`),
+                          h(
+                            'td',
+                            null,
+                            isW ? s.walletMetrics.fxWithdrawToCorporate : s.actualPayout,
+                            isW
+                              ? h(
+                                  'div',
+                                  { style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 } },
+                                  Number(s.walletMetrics.fxWithdrawToPersonal) > 0 && h('span', { style: { fontSize: 10.5, color: 'var(--ftx-orange)', fontWeight: 700 } }, `私户 P0: ${s.walletMetrics.fxWithdrawToPersonal}`),
+                                  Number(s.walletMetrics.unverifiedWithdraw) > 0 && h('span', { style: { fontSize: 10.5, color: 'var(--ftx-orange)' } }, `待核: ${s.walletMetrics.unverifiedWithdraw}`),
+                                  Number(s.walletMetrics.directSpend) > 0 && h('span', { style: { fontSize: 10.5, color: 'var(--ftx-mut)' } }, `坐支 ${s.walletMetrics.directSpend}`),
+                                )
+                              : Number(s.actualPayout) !== 0 && h('div', { title: t.payoutDiffHelp, style: { fontSize: 10.5, color: 'var(--ftx-mut)' } }, `${t.payoutDiff} ${s.statementPayoutDiff}`),
+                          ),
+                          h(
+                            'td',
+                            null,
+                            isW && s.walletMetrics.netVerifiedRows === 0
+                              ? h('span', { style: { color: 'var(--ftx-mut)', fontSize: 11, fontFamily: 'inherit' } }, '无 Net 列')
+                              : h('span', { style: { color: s.horizontalBalanced ? 'var(--ftx-ok)' : 'var(--ftx-orange)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: 'inherit' } }, s.horizontalBalanced ? h(Icon, { kind: 'check', size: 12 }) : '!', s.horizontalBalanced ? '守恒' : `差 ${s.horizontalDiffTotal}`),
+                          ),
+                        )
+                      }),
                     ),
                   ),
                 )
@@ -996,17 +1204,23 @@ window.__ModuleLoader__.load({
                   h(
                     'div',
                     { style: { display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' } },
-                    h('button', { type: 'button', className: 'ftx-btn-sm on', disabled: busy, onClick: () => handleDemo('v7') }, t.runDemoV7),
+                    h('button', { type: 'button', className: 'ftx-btn-sm on', disabled: busy, onClick: () => handleDemo('v8') }, t.runDemoV8),
+                    h('button', { type: 'button', className: 'ftx-btn-sm', disabled: busy, onClick: () => handleDemo('v7') }, t.runDemoV7),
                     h('button', { type: 'button', className: 'ftx-btn-sm', disabled: busy, onClick: () => handleDemo('all') }, t.runDemo),
                   ),
                 ),
             h(
               'div',
               { className: 'ftx-adapters', style: { marginTop: 'auto' } },
-              h('span', { style: { fontWeight: 700, color: 'var(--ftx-ink)' } }, '适配器 08'),
+              h('span', { style: { fontWeight: 700, color: 'var(--ftx-ink)' } }, '销售 08'),
               ...ADAPTERS.map((adp) => {
                 const used = [...loadedPlats].some((p) => p.toLowerCase().includes(adp.toLowerCase().split(' ')[0]))
                 return h('span', { key: adp, className: `ftx-adp${used ? ' used' : ''}` }, h('i', null), adp)
+              }),
+              h('span', { style: { fontWeight: 700, color: 'var(--ftx-ok)', marginLeft: 4 } }, '结汇 03'),
+              ...WALLET_ADAPTERS.map((adp) => {
+                const used = [...loadedPlats].some((p) => p.toLowerCase().includes(adp.toLowerCase()))
+                return h('span', { key: adp, className: `ftx-adp wallet${used ? ' used' : ''}` }, h('i', null), adp)
               }),
             ),
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: 'var(--ftx-mut)' } }, h(Icon, { kind: 'chip', size: 14 }), '原始账单明细仅在本机内存解析 · 不外传'),
@@ -1089,10 +1303,10 @@ window.__ModuleLoader__.load({
             { className: `ftx-act drop${dragging ? ' is-drag' : ''}` },
             h(Icon, { kind: 'upload', size: 16 }),
             h('span', null, busy ? t.parsing : t.pickFiles),
-            h('small', { style: { fontSize: 10.5, color: 'var(--ftx-mut)', fontWeight: 500 } }, '支持 8 平台'),
+            h('small', { style: { fontSize: 10.5, color: 'var(--ftx-mut)', fontWeight: 500 } }, '11 通道支持'),
             h('input', { type: 'file', multiple: true, accept: '.csv,.tsv,.txt,.xlsx,.xlsm,.zip', style: { display: 'none' }, onChange: (e) => { handleFiles(e.target.files); e.target.value = '' } }),
           ),
-          h('button', { type: 'button', className: 'ftx-act pri', onClick: jumpBridge }, h('span', null, '一键带入四层桥接精算 →')),
+          h('button', { type: 'button', className: 'ftx-act pri', disabled: isWalletOnly, title: isWalletOnly ? '纯结汇通道未含销售报送额，请合并拖入电商账单' : '', onClick: jumpBridge }, h('span', null, isWalletOnly ? '需合并销售账单方能桥接' : '一键带入四层桥接精算 →')),
           h('button', { type: 'button', className: 'ftx-act', disabled: !data, onClick: () => data && downloadText(data.reportHtml, '跨境店铺税务初筛体检诊断书.html', 'text/html;charset=utf-8') }, h(Icon, { kind: 'download', size: 16 }), t.exportHtml),
           h('button', { type: 'button', className: 'ftx-act', disabled: !data?.anomaliesCsv, onClick: () => data?.anomaliesCsv && downloadText(data.anomaliesCsv, '跨境店铺异常排雷清单.csv', 'text/csv;charset=utf-8') }, h(Icon, { kind: 'download', size: 16 }), t.exportCsv),
         ),
@@ -1103,9 +1317,11 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
-              h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleDemo('all') }, t.runDemo),
+              h('button', { type: 'button', className: 'ftx-btn-sm on', onClick: () => handleDemo('v8') }, t.runDemoV8),
               h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleDemo('v7') }, t.runDemoV7),
+              h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleDemo('all') }, t.runDemo),
               h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => downloadText(data.reportMd, '跨境店铺税务初筛体检诊断书.md', 'text/markdown;charset=utf-8') }, t.exportMd),
+              hasHistory && h('button', { type: 'button', className: 'ftx-btn-sm', onClick: handleExportTrendReport }, t.exportTrendHtml),
             ),
             h('span', null, '边界声明：本面板仅输出离线初筛与排雷结论，正式月结请结合 IMA 实战库与执业税务师复核'),
           ),
@@ -1444,11 +1660,15 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { refreshStatus() }, [refreshStatus])
 
+      const copyTimerRef = useRef(null)
+      useEffect(() => () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current) }, [])
+
       const onCopyText = async (key, text) => {
         try {
           if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text)
+          if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
           setCopiedKey(key)
-          setTimeout(() => setCopiedKey(''), 1800)
+          copyTimerRef.current = setTimeout(() => setCopiedKey(''), 1800)
         } catch { /* ignore */ }
       }
 
@@ -1475,7 +1695,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: `ftx-tab${tab === 'settings' ? ' is-active' : ''}`, onClick: () => setTab('settings') }, t.tabSettings),
           h('span', { className: 'ftx-local-tag' }, h('i', null), t.localPill),
         ),
-        h('div', { style: { display: tab === 'radar' ? 'block' : 'none' } }, h(StatementRadarTab, { t, onCopyText, copiedKey, onJumpToCalc })),
+        h('div', { style: { display: tab === 'radar' ? 'block' : 'none' } }, h(StatementRadarTab, { t, status, refreshStatus, onCopyText, copiedKey, onJumpToCalc })),
         h('div', { style: { display: tab === 'calc' ? 'block' : 'none' } }, h(CalculatorTab, { t, isZh, onCopyText, copiedKey, calcSeed })),
         h('div', { style: { display: tab === 'settings' ? 'block' : 'none' } }, h(SettingsTab, { t, status, refreshStatus })),
         h(

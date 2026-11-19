@@ -816,7 +816,8 @@ test('v0.7.1 API /status 返回候选版本与 /history?id=xxx 查询参数删�
   try {
     const st = await call('GET', '/api/fintax/status')
     assert.equal(st.status, 200)
-    assert.equal(st.json.version, '0.7.1')
+    const expectedVer = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+    assert.equal(st.json.version, expectedVer)
     const saved = await call('POST', '/api/fintax/history', { month: '2026-11', grossCny: 500_000, netSalesCny: 480_000 })
     const del = await call('DELETE', `/api/fintax/history?id=${encodeURIComponent(saved.json.entry.id)}`)
     assert.equal(del.status, 200)
