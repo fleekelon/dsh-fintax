@@ -1,7 +1,7 @@
 {
   "name": "dsh-fintax",
-  "version": "0.5.0",
-  "description": "财税工作台：Amazon/TikTok/Temu/Shopify/Stripe 五大平台原始账单(.csv/.xlsx/.zip)离线合并体检雷达、可打印HTML体检单导出、IMA 知识库引证问答与 7 场景确定性算税对账引擎。FinTax workbench for DeepSeek Harness.",
+  "version": "0.6.0",
+  "description": "财税工作台：DSH 侧边栏独立交互财税工作台（0 Token 拖拽五大平台原始账单/.zip 排雷、7 大确定性交互算税、导出老板汇报 HTML 体检单）+ 腾讯 IMA 法规引证。FinTax workbench for DeepSeek Harness.",
   "author": "fleekelon",
   "type": "module",
   "main": "./index.js",

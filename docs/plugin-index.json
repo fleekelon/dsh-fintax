@@ -6,8 +6,8 @@
       "name": "dsh-fintax",
       "title": { "en": "FinTax workbench", "zh": "财税工作台" },
       "description": {
-        "en": "Offline 5-platform (Amazon/TikTok/Temu/Shopify/Stripe) raw statement & .zip diagnostic parser with multi-currency consolidation & printable HTML reports, Tencent IMA policy Q&A, GUI settings, and 7 deterministic tax calculators.",
-        "zh": "支持 Amazon/TikTok/Temu/Shopify/Stripe 五大平台原始账单及 .zip 压缩包离线合并体检雷达、可打印 HTML 体检诊断书导出、腾讯 IMA 知识库引证问答、图形化设置面板与 7 场景确定性算税对账引擎。"
+        "en": "Standalone DSH sidebar FinTax workbench (zero-token drag-and-drop 5-platform Amazon/TikTok/Temu/Shopify/Stripe & .zip statement auditor, 7 interactive tax calculators, printable HTML reports) plus read-only Tencent IMA policy Q&A.",
+        "zh": "DSH 左侧边栏独立可视化财税工作台：0 Token 拖入 Amazon/TikTok/Temu/Shopify/Stripe 五大平台原始账单与 .zip 压缩包离线排雷、7 大确定性交互算税表单、一键导出老板汇报 HTML 体检单及腾讯 IMA 知识库政策引证。"
       },
       "author": "fleekelon",
       "homepage": "https://github.com/fleekelon/dsh-fintax#readme",
@@ -15,8 +15,8 @@
       "icon": "https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg",
       "versions": [
         {
-          "version": "0.5.0",
-          "publishTimestamp": 1794931920,
+          "version": "0.6.0",
+          "publishTimestamp": 1795068156,
           "source": { "type": "npm" },
           "engines": { "dsh": ">=0.2.1-rc.2 <1.0.0" }
         }

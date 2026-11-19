@@ -18,8 +18,14 @@ import {
   CREDENTIALS_HELP,
 } from './lib/ima.js'
 import { calculate, platformTaxReconcile } from './lib/calc.js'
-import { parsePlatformStatement, fmtAmount, toNumber2 } from './lib/statement.js'
-import { buildConsolidatedReconcile, exportDiagnosticReport } from './lib/report.js'
+import { parsePlatformStatement, parseStatementBuffer, fmtAmount, toNumber2 } from './lib/statement.js'
+import {
+  buildConsolidatedReconcile,
+  exportDiagnosticReport,
+  renderDiagnosticReportHtml,
+  renderDiagnosticReportMd,
+  serializeSummary,
+} from './lib/report.js'
 
 const PKG_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_VERSION = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version
@@ -146,13 +152,17 @@ export function createFintaxApiHandler({ getConnection }) {
 
       if (subPath === '/kbs' && method === 'GET') {
         if (!loadCredentials()) {
-          return send(400, { error: '尚未配置完整的 IMA Client ID 与 API Key，请先在上方保存凭证' })
+          return send(400, { error: '尚未配置完整的 IMA Client ID 与 API Key，请先保存凭证' })
         }
-        const data = await imaCall('openapi/wiki/v1/search_knowledge_base', {
-          query: url.searchParams.get('query') ?? '',
-          cursor: '',
-          limit: 50,
-        })
+        const data = await imaCall(
+          'openapi/wiki/v1/search_knowledge_base',
+          {
+            query: url.searchParams.get('query') ?? '',
+            cursor: '',
+            limit: 50,
+          },
+          { noCache: url.searchParams.get('refresh') === '1' },
+        )
         const list = data.info_list ?? data.knowledge_base_list ?? data.list ?? []
         const kbs = Array.isArray(list)
           ? list.map((kb) => ({
@@ -163,6 +173,74 @@ export function createFintaxApiHandler({ getConnection }) {
             }))
           : []
         return send(200, { ok: true, kbs })
+      }
+
+      if (subPath === '/calc' && method === 'POST') {
+        const body = await readJsonBody(req, 65_536)
+        const scenario = String(body?.scenario ?? '').trim()
+        if (!scenario) return send(400, { error: 'scenario（算税场景标识）不能为空' })
+        try {
+          const result = calculate(scenario, body?.params || {})
+          return send(200, { ok: true, result })
+        } catch (calcErr) {
+          return send(400, { error: calcErr?.message || '试算参数校验失败' })
+        }
+      }
+
+      if (subPath === '/parse' && method === 'POST') {
+        const body = await readJsonBody(req, 28 * 1024 * 1024)
+        const platform = String(body?.platform ?? 'auto').trim() || 'auto'
+        const t0 = performance.now()
+        let summaries = []
+        try {
+          if (body?.demo && String(body.demo).trim()) {
+            const rawDemo = String(body.demo).trim()
+            const demoKey = /^demo(?::|$)/i.test(rawDemo) ? rawDemo : `demo:${rawDemo}`
+            summaries = parsePlatformStatement(demoKey, platform)
+          } else if (Array.isArray(body?.files) && body.files.length > 0) {
+            if (body.files.length > 24) {
+              return send(400, { error: '单次最多同时解析 24 份账单文件，请分批上传或打包为 .zip' })
+            }
+            for (const f of body.files) {
+              const name = String(f?.name ?? '').trim()
+              const b64 = typeof f?.dataBase64 === 'string' ? f.dataBase64.trim() : ''
+              if (!name || !b64) return send(400, { error: '上传文件缺少文件名或有效数据内容' })
+              const buf = Buffer.from(b64, 'base64')
+              summaries.push(...parseStatementBuffer(buf, name, platform))
+            }
+          } else {
+            return send(400, { error: '请拖入至少一份账单文件，或选择沙盒演示模式（demo: "all"）' })
+          }
+        } catch (parseErr) {
+          return send(400, { error: parseErr?.message || '账单解析失败' })
+        }
+
+        const elapsedMs = Math.round((performance.now() - t0) * 10) / 10
+        const hasFxInput =
+          (body?.fxRateToCny !== null && body?.fxRateToCny !== undefined && String(body.fxRateToCny).trim() !== '') ||
+          (body?.fxRates && (typeof body.fxRates === 'object' || String(body.fxRates).trim() !== '')) ||
+          summaries.every((s) => s.currency === 'RMB' || s.currency === 'CNY')
+
+        const consolidated = hasFxInput
+          ? buildConsolidatedReconcile(summaries, {
+              fxRateToCny: body?.fxRateToCny,
+              fxRates: body?.fxRates,
+              declaredVatSalesCny: body?.declaredVatSalesCny,
+            })
+          : null
+
+        const reportHtml = renderDiagnosticReportHtml({ summaries, consolidated, version: PKG_VERSION })
+        const reportMd = renderDiagnosticReportMd({ summaries, consolidated, version: PKG_VERSION })
+
+        return send(200, {
+          ok: true,
+          version: PKG_VERSION,
+          elapsedMs,
+          summaries: summaries.map(serializeSummary),
+          consolidated,
+          reportHtml,
+          reportMd,
+        })
       }
 
       return send(404, { error: `未知接口：${method} ${subPath}` })
@@ -621,6 +699,7 @@ export function apply(ctx) {
             consolidated,
             exportPath: args.export_report_path,
             firstInputPath: inputPaths[0],
+            version: PKG_VERSION,
           })
           if (savedPath) {
             blocks.push(`📄 已生成可打印汇报版《税务初筛体检诊断书》：${savedPath}（可直接用浏览器打开打印 PDF 发给老板或团队审阅）`)

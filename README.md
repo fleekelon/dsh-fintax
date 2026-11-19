@@ -1,17 +1,22 @@
-# dsh-fintax — 财税工作台 (v0.5.0)
+# dsh-fintax — 财税工作台 (v0.6.0)
 
 [![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
+[![CI](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml/badge.svg)](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![DSH Plugin](https://img.shields.io/badge/DSH-plugin-4fc3f7)](https://github.com/topics/dsh-plugin)
 
 <img src="https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg" width="80" alt="dsh-fintax icon">
 
-DeepSeek Harness 插件：把**五大跨境平台原始账单离线合并体检**、**IMA 专业政策引证问答**与**代码级确定性算税对账**装进桌面工作台。纯 ESM 零第三方依赖（免装 Python / LibreOffice），开箱即用。
+DeepSeek Harness 财税插件：在 DSH 左侧边栏原生嵌入**独立可视化财税工作台（0 Token 拖入五大平台原始账单与 `.zip` 离线排雷 + 7 大确定性交互算税表单 + 一键导出可打印 HTML 老板体检单）**，并结合 **腾讯 IMA 专业知识库** 完成只读法规引证。纯 ESM 零第三方运行时依赖（免装 Python / LibreOffice），开箱即用。
 
-- **五大平台原始账单 / `.zip` 压缩包离线合并体检与汇报单导出（`fintax_parse_statement`，v0.5 重磅升级）**：
-  - 直接读取官方原样导出的 **Amazon**（Date Range CSV / Flat File V2 全站点）、**TikTok Shop**（Statements 多表 `.xlsx` / `.csv`）、**Temu**（半托管自营 / 全托管供货结算 `.csv` / `.xlsx`）、**Shopify 独立站**（Shopify Payments / Orders `.csv` / `.xlsx`）、**Stripe**（余额流水 `.csv` / `.xlsx`），支持 **`.zip` 账单压缩包免解压直拖**、**`UTF-16` Unicode 文本兼容**及 **`demo:all` 零文件 10ms 沙盒自测**；
-  - 纯原生 `BigInt` 定点运算精确到 `0.01` 分：支持传入 `fx_rates` 多币种汇率映射完成**多站点/年度多月合并人民币总对账**与 **7,500 万小微核定生死崖进度预警**；自动扫描 **TikTok / Temu 全托管与自营混同 P0 阻断、Shopify/Stripe 自收境外 VAT 剥离、虚拟卡直付广告防坐支、未捕获弃单、拒付争议与履约罚款**；
-  - 支持传入 `export_report_path: "auto"` 一键在本地生成排版清晰、可浏览器打印 PDF 发给老板审阅的 **《跨境店铺税务初筛体检诊断书 (.html / .md)》**；原始订单明细 100% 留在本机内存。
+- **左侧边栏独立可视化工作台（`v0.6` 重磅新增，0 Token 毫秒级响应）**：
+  - 安装后在 DSH 左侧导航栏直接点击 **「财税工作台」**（同时兼容 **「设置 → 财税工作台」**），无需手写提示词、不消耗大模型 Token；
+  - **Tab 1 · 账单离线排雷台**：支持直接拖拽多份账单或 `.zip` 原包（亦支持一键载入三平台沙盒体验），实时展示 P0/P1/P2 异常雷达、**7,500 万小微生死崖进度条**、多币种汇率动态重算与一键导出可打印 `.html / .md` 老板汇报诊断书；
+  - **Tab 2 · 7 大确定性交互算税台**：表单化直接精算平台报送四层桥接、开票加点临界 $g^*$、4% 核定 300 万崖、出口免退税、年终奖一元陷阱、跨境进口综合税与价税分离；
+  - **Tab 3 · IMA 知识库设置**：免命令行安全保存只读凭证、一键刷新并绑定默认优先库（内置 5xx 指数退避重试与 60s 只读目录缓存，且前端具备宿主崩溃隔离保护）。
+- **五大平台原始账单 / `.zip` 压缩包离线合并体检与汇报单导出（`fintax_parse_statement`）**：
+  - 支持原样导出的 **Amazon**（Date Range CSV / Flat File V2 全站点）、**TikTok Shop**（Statements 多表 `.xlsx` / `.csv`）、**Temu**（半托管自营 / 全托管供货结算 `.csv` / `.xlsx`）、**Shopify 独立站**（Shopify Payments / Orders `.csv` / `.xlsx`）、**Stripe**（余额流水 `.csv` / `.xlsx`），支持 **`.zip` 账单压缩包免解压直拖**、**`UTF-16` Unicode 文本兼容**及 **`demo:all` 零文件 10ms 沙盒自测**；
+  - 纯原生 `BigInt` 定点运算精确到 `0.01` 分：支持 `fx_rates` 多币种合并人民币总对账与 **7,500 万小微核定生死崖进度预警**；自动扫描 **TikTok / Temu 全托管与自营混同 P0 阻断、Shopify/Stripe 自收境外 VAT 剥离、虚拟卡直付广告防坐支、未捕获弃单、拒付争议与履约罚款**；原始订单明细 100% 留在本机内存。
 - **桌面端图形化配置页**：打开 DSH **「设置 → 财税工作台」** 免命令行粘贴保存腾讯 IMA 凭证、一键测试连接并绑定**默认优先财税知识库**。
 - **7 大代码级确定性算税与差额桥接引擎（`fintax_calc`，免配 IMA 亦可离线使用）**：
   1. **平台涉税报送四层口径差额桥接（`platform_tax_reconcile`）**：拆解平台报送总额 vs 结算实际放款 vs 增值税已申报额，自动排雷「拿回款净额报税、佣金违规冲减收入」；
@@ -23,19 +28,19 @@ DeepSeek Harness 插件：把**五大跨境平台原始账单离线合并体检*
   7. **增值税价税分离（`vat`）**。
 - **政策引证问答 & 监管代码决策树**：只读检索你 IMA 知识库里的政策原文与 SOP，回答附真实来源与文号。
 
-## 实测效果与界面预览
+## 实测效果与独立工作台实机截图（v0.6.0）
 
-1. **原始结算账单毫秒级离线初筛与 P0/P1 异常雷达（`fintax_parse_statement`）**：
+1. **DSH 侧边栏独立财税工作台 — 五大平台原始账单 / `.zip` 拖拽排雷与多币种总对账**：
 
-![原始账单离线体检与异常雷达](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/statement-radar.png)
+![侧边栏财税工作台：原始账单排雷与7500万生死崖监控](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/statement-radar.png)
 
-2. **桌面端「设置 → 财税工作台」免命令行一键绑库与提问模板**：
+2. **0 Token 交互式 7 大确定性算税与差额桥接计算器**：
 
-![图形化设置面板](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/settings-workbench.png)
+![7大确定性交互算税引擎](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/calc-engines.png)
 
-3. **7 大代码级确定性算税对账引擎与 4 项现行法规技能矩阵**：
+3. **免命令行图形化 IMA 知识库凭证与默认优先库绑定**：
 
-![7大确定性算税引擎](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/calc-engines.png)
+![图形化 IMA 设置面板](https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/docs/settings-workbench.png)
 
 ## 安装（支持图形界面一键安装，无需命令行）
 

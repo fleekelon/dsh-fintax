@@ -16,7 +16,7 @@ import {
   platformTaxReconcile,
 } from '../lib/calc.js'
 import { parseAmount, fmtAmount, parsePlatformStatement } from '../lib/statement.js'
-import { imaCall, loadCredentials, getPublicStatus, loadFintaxSettings, saveFintaxSettings, saveCredentials } from '../lib/ima.js'
+import { imaCall, clearImaCache, loadCredentials, getPublicStatus, loadFintaxSettings, saveFintaxSettings, saveCredentials } from '../lib/ima.js'
 
 test('跨境电商综合税：普通商品 13%×70%=9.1%', () => {
   const r = crossBorderImport({ price: 1000 })
@@ -1081,5 +1081,182 @@ test('v0.5.0 回归：.zip 压缩包免解压直拖 + 多币种 fx_rates 合并�
     assert.ok(mdText.includes('Temu 全托管供货与半托管自营混同'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+
+// ── v0.6.0 回归测试套件：IMA 重试与 60s 缓存、工作台 HTTP API (/parse & /calc) 与侧边栏多槽位挂载 ──
+
+test('v0.6.0 回归：IMA 5xx 指数退避重试、60s 只读目录缓存命中与凭证变更自动清缓存', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fintax-ima-v06-'))
+  const savedEnv = {
+    FINTAX_CONFIG_DIR: process.env.FINTAX_CONFIG_DIR,
+    IMA_CLIENT_ID: process.env.IMA_CLIENT_ID,
+    IMA_API_KEY: process.env.IMA_API_KEY,
+  }
+  const origFetch = globalThis.fetch
+  try {
+    process.env.FINTAX_CONFIG_DIR = dir
+    delete process.env.IMA_CLIENT_ID
+    delete process.env.IMA_API_KEY
+    saveCredentials({ clientId: 'cid_v06', apiKey: 'key_v06' })
+    clearImaCache()
+
+    let callCount = 0
+    globalThis.fetch = async () => {
+      callCount++
+      if (callCount === 1) return new Response('upstream error', { status: 502 })
+      return new Response(JSON.stringify({ code: 0, data: { info_list: [{ kb_id: 'kb_ok', kb_name: '跨境财税主库' }] } }))
+    }
+
+    // 第 1 次 502 自动重试并在第 2 次成功
+    const d1 = await imaCall('openapi/wiki/v1/search_knowledge_base', { query: '', cursor: '', limit: 10 }, { retryBaseMs: 1 })
+    assert.equal(d1.info_list[0].kb_id, 'kb_ok')
+    assert.equal(callCount, 2)
+
+    // 紧接着同参再查：命中 60s 缓存，不再发起网络请求
+    const d2 = await imaCall('openapi/wiki/v1/search_knowledge_base', { query: '', cursor: '', limit: 10 }, { retryBaseMs: 1 })
+    assert.equal(d2.info_list[0].kb_id, 'kb_ok')
+    assert.equal(callCount, 2)
+
+    // noCache: true 绕过缓存重新请求
+    await imaCall('openapi/wiki/v1/search_knowledge_base', { query: '', cursor: '', limit: 10 }, { noCache: true, retryBaseMs: 1 })
+    assert.equal(callCount, 3)
+
+    // 更新凭证自动清缓存
+    saveCredentials({ clientId: 'cid_v06', apiKey: 'key_v06_new' })
+    await imaCall('openapi/wiki/v1/search_knowledge_base', { query: '', cursor: '', limit: 10 }, { retryBaseMs: 1 })
+    assert.equal(callCount, 4)
+  } finally {
+    clearImaCache()
+    globalThis.fetch = origFetch
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v0.6.0 回归：工作台后端 /api/fintax/parse 与 /api/fintax/calc 全链路（含 base64 多文件、沙盒与权限拦截）', async () => {
+  const { createFintaxApiHandler } = await import('../index.js')
+
+  const invoke = (handler, method, path, bodyObj) =>
+    new Promise((resolve) => {
+      const payload = bodyObj !== undefined ? JSON.stringify(bodyObj) : ''
+      const req = Readable.from(payload ? [Buffer.from(payload)] : [])
+      req.method = method
+      req.url = path
+      const res = {
+        status: 200,
+        body: '',
+        writeHead(s) { this.status = s },
+        end(b) { this.body = b; resolve({ status: this.status, json: JSON.parse(b) }) },
+      }
+      handler(req, res)
+    })
+
+  // 未登录拦截（401）
+  const denyHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ rejection: 401 }) }) })
+  const r401 = await invoke(denyHandler, 'POST', '/api/fintax/parse', { demo: 'all' })
+  assert.equal(r401.status, 401)
+
+  const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+
+  // 1. /api/fintax/calc 全 7 大场景确定性试算校验
+  const guiDefaults = [
+    ['platform_tax_reconcile', { reportedGrossRevenue: 6000000, refunds: 450000, marketplaceWithheldTax: 350000, cutoffAndFxDiff: 400000, platformFees: 600000, declaredVatSales: 4200000 }],
+    ['export_invoice_breakeven', { barePurchaseAmount: 1000000, supplierMarkupRate: 0.08, vatRate: 0.13, rebateRate: 0.13, exportRevenue: 1500000 }],
+    ['cbec_assessed_cit', { revenue: 80000000, taxableIncomeRate: 0.04, smallLowProfit: true }],
+    ['export_rebate', { purchaseAmount: 500000, vatRate: 0.13, rebateRate: 0.09 }],
+    ['annual_bonus_iit', { bonus: 36001 }],
+    ['cross_border_import', { price: 1200, vatRate: 0.13, consumptionTaxRate: 0.15, annualUsed: 0 }],
+    ['vat', { amount: 1130000, rate: 0.13, inclusive: true }],
+  ]
+  for (const [sc, params] of guiDefaults) {
+    const r = await invoke(okHandler, 'POST', '/api/fintax/calc', { scenario: sc, params })
+    assert.equal(r.status, 200, `GUI default calc failed for ${sc}: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.ok, true)
+    if (sc === 'annual_bonus_iit') assert.ok(r.json.result.trap && r.json.result.trap.boundary === 36000)
+  }
+
+  const rCalcBad = await invoke(okHandler, 'POST', '/api/fintax/calc', { scenario: 'vat', params: { amount: -10 } })
+  assert.equal(rCalcBad.status, 400)
+
+  // 2. /api/fintax/parse 沙盒演示 + 合并折算 + HTML/MD 诊断书
+  const rDemo = await invoke(okHandler, 'POST', '/api/fintax/parse', {
+    demo: 'all',
+    fxRates: { USD: 7.18, EUR: 7.82 },
+    declaredVatSalesCny: 580000,
+  })
+  assert.equal(rDemo.status, 200)
+  assert.equal(rDemo.json.ok, true)
+  assert.equal(rDemo.json.summaries.length, 3)
+  assert.equal(rDemo.json.consolidated.ready, true)
+  assert.ok(rDemo.json.reportHtml.includes('跨境店铺原始结算账单 · 税务初筛体检诊断书'))
+  assert.ok(rDemo.json.reportMd.includes('# 跨境店铺原始结算单税务初筛体检诊断书'))
+
+  // 3. /api/fintax/parse Base64 真实账单文件内存直解析
+  const temuCsv = [
+    '结算时间,订单号,经营模式,账务类型,站点,币种,商品零售价,供货结算价,技术服务费,应结金额',
+    '2026-11-10,PO-GUI-1,半托管,销售结算,US,USD,100000.00,0.00,5000.00,95000.00',
+    '2026-11-12,JIT-GUI-2,全托管,供货货款,US,USD,0.00,20000.00,0.00,20000.00',
+  ].join('\n')
+  const rFile = await invoke(okHandler, 'POST', '/api/fintax/parse', {
+    files: [{ name: 'Temu_Upload.csv', dataBase64: Buffer.from(temuCsv, 'utf8').toString('base64') }],
+    fxRates: { USD: 7.18 },
+  })
+  assert.equal(rFile.status, 200)
+  assert.equal(rFile.json.summaries[0].platform, 'Temu')
+  assert.equal(rFile.json.summaries[0].taxReportingGrossRef, '120000.00')
+  assert.ok(rFile.json.summaries[0].anomalies.some((a) => a.severity.startsWith('P0')))
+})
+
+test('v0.6.0 回归：client.js 同时注册 sidebar.panellist + main + settings.section.icon + settings.section 且带崩溃隔离', async () => {
+  let loadedModule = null
+  globalThis.window = {
+    __ModuleLoader__: {
+      load(def) { loadedModule = def },
+    },
+  }
+  try {
+    await import(`../client.js?v06=${Date.now()}`)
+    const fakeReact = {
+      createElement: (tag, props, ...children) => ({ tag, props, children }),
+      useState: (v) => [typeof v === 'function' ? v() : v, () => {}],
+      useEffect: () => {},
+      useCallback: (fn) => fn,
+    }
+    const plugin = loadedModule.factory(() => fakeReact)
+    const registered = []
+    plugin.apply({
+      locale: { bind: () => (k) => k, register: () => () => {}, getLocale: () => ({ active: 'zh-CN' }) },
+      effect: (fn) => fn(),
+      slots: {
+        inject: (_slot, fn) => fn(),
+        register: (meta, renderFn) => {
+          registered.push({ meta, renderFn })
+          return () => {}
+        },
+      },
+    })
+    const names = registered.map((r) => r.meta.name)
+    assert.ok(names.includes('main'))
+    assert.ok(names.includes('sidebar.panellist'))
+    assert.ok(names.includes('settings.section.icon'))
+    assert.equal(names[names.length - 1], 'settings.section')
+
+    // 确认渲染函数可无报错构造虚拟树，且宿主抛出异常时 apply 不向外抛错拖垮桌面端
+    const mainEntry = registered.find((r) => r.meta.name === 'main')
+    assert.ok(mainEntry.renderFn())
+    assert.doesNotThrow(() => {
+      plugin.apply({
+        locale: { bind: () => { throw new Error('simulated old host crash') } },
+        effect: () => {},
+        slots: { inject: () => {}, register: () => {} },
+      })
+    })
+  } finally {
+    delete globalThis.window
   }
 })

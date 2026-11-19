@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "FinTax workbench",
-    "description": "Offline Amazon/TikTok/Stripe raw statement parser & anomaly radar, cited tax Q&A via Tencent IMA knowledge base, GUI settings, and 7 deterministic tax calculators."
+    "description": "Standalone DSH sidebar FinTax workbench: zero-token drag-and-drop Amazon/TikTok/Temu/Shopify/Stripe & .zip statement auditor, 7 interactive tax calculators, printable HTML boss reports, and Tencent IMA policy Q&A."
   }
 }
