@@ -662,7 +662,7 @@ test('Stripe 独立站 CSV + 工具端到端调用：过滤未捕获废单、拦
     assert.ok(report.includes('防坐支预警'), '应触发虚拟卡直付广告防坐支预警')
     assert.ok(report.includes('Chargeback/Dispute'), '应识别拒付争议并分离争议费')
     assert.ok(report.includes('300.00 USD'), '应统计已过滤未捕获废单金额')
-    assert.ok(report.includes('账单内放款差额：0.00 USD'), '理论放款与实际 Payout 应精确轧平为 0.00')
+    assert.ok(report.includes('放款差额（实际 − 理论，正为多放、负为少放）：0.00 USD'), '理论放款与实际 Payout 应精确轧平为 0.00')
     assert.equal(report.includes('未轧平'), false, '独立站待自申报流转税联动四层桥接时应精确轧平为 0，不得误报资金链未轧平')
     // 验证商业护城河红线：不得暴露内部母表坐标或记账凭证字样
     assert.equal(report.includes('02表'), false, '开源报告不得暴露私域母表列坐标')
@@ -866,12 +866,18 @@ test('v0.4.2 回归：IMA 配置一致性、imaCall 调度与 ima_read 全分支
     delete process.env.IMA_DEFAULT_KB_ID
 
     // 2) mock globalThis.fetch 测试 imaCall、ima_search/ima_browse 空白传参回退默认库、ima_read 多分支
+    const question = '以前的平台报送数据错了，卖家应该怎么申请更正？'
+    const searches = []
     globalThis.fetch = async (url, init) => {
       const u = String(url)
       if (u.includes('search_knowledge')) {
         const body = JSON.parse(init.body)
         assert.equal(body.knowledge_base_id, 'kb_local')
-        return new Response(JSON.stringify({ code: 0, data: { info_list: [{ media_id: 'md_1', title: '2026新规', media_type: 7 }], is_end: true } }))
+        searches.push(body.query)
+        const item = body.query === '2026'
+          ? { media_id: 'md_1', title: '2026新规', media_type: 7 }
+          : body.query === '平台更正' ? { media_id: 'md_2', title: '平台更正流程', media_type: 7 } : null
+        return new Response(JSON.stringify({ code: 0, data: { info_list: item ? [item] : [], is_end: true } }))
       }
       if (u.includes('get_media_info')) {
         const { media_id } = JSON.parse(init.body)
@@ -896,6 +902,12 @@ test('v0.4.2 回归：IMA 配置一致性、imaCall 调度与 ima_read 全分支
 
     const searchOut = await tools.ima_search.execute({ knowledge_base_id: '   ', query: '2026' })
     assert.ok(searchOut.includes('[库 kb_local] 命中 1 条'))
+
+    const fallbackOut = await tools.ima_search.execute({ query: question })
+    assert.equal(searches[1], question)
+    assert.ok(searches.slice(2).includes('平台更正'))
+    assert.match(fallbackOut, /短词补查：.*平台更正/)
+    assert.match(fallbackOut, /"media_id": "md_2"/)
 
     const folderOut = await tools.ima_read.execute({ media_id: 'folder_123' })
     assert.ok(folderOut.includes('请调用 ima_browse'))
@@ -1061,12 +1073,12 @@ test('v0.5.0 回归：.zip 压缩包免解压直拖 + 多币种 fx_rates 合并�
       export_report_path: htmlPath,
     })
     assert.ok(out.includes('共合并 2 张结算单'))
-    assert.ok(out.includes('放款差额 = 0 元'))
-    assert.ok(out.includes('7,500万小微生死崖红灯'))
+    assert.match(out, /放款差额（实际放款 − 理论放款）=.*= 0 元/)
+    assert.ok(out.includes('4% 核定收入等值初筛'))
 
     const htmlText = readFileSync(htmlPath, 'utf8')
     assert.ok(htmlText.includes('跨境店铺原始结算账单 · 税务初筛体检诊断书'))
-    assert.ok(htmlText.includes('7,500万小微生死崖红灯'))
+    assert.ok(htmlText.includes('4% 核定收入等值初筛'))
     assert.ok(!htmlText.includes('借：应收账款')) // 严守护城河，不泄露正式会计分录
 
     // 验证 demo:all 沙盒与 Markdown 导出
@@ -1075,7 +1087,7 @@ test('v0.5.0 回归：.zip 压缩包免解压直拖 + 多币种 fx_rates 合并�
       fx_rates: '{"USD": 7.18, "EUR": 7.82}',
       export_report_path: mdPath,
     })
-    assert.ok(demoOut.includes('放款差额 = 0 元'))
+    assert.match(demoOut, /放款差额（实际放款 − 理论放款）=.*= 0 元/)
     const mdText = readFileSync(mdPath, 'utf8')
     assert.ok(mdText.includes('# 跨境店铺原始结算单税务初筛体检诊断书'))
     assert.ok(mdText.includes('Temu 全托管供货与半托管自营混同'))

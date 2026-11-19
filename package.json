@@ -1,7 +1,7 @@
 {
   "name": "dsh-fintax",
-  "version": "0.6.0",
-  "description": "财税工作台：DSH 侧边栏独立交互财税工作台（0 Token 拖拽五大平台原始账单/.zip 排雷、7 大确定性交互算税、导出老板汇报 HTML 体检单）+ 腾讯 IMA 法规引证。FinTax workbench for DeepSeek Harness.",
+  "version": "0.7.1",
+  "description": "财税工作台：DSH 侧边栏离线解析 8 大跨境平台及资金池账单、10 项交互算税、12 个月滚动风险初筛、诊断报告与异常 CSV 导出、腾讯 IMA 法规检索。FinTax workbench for DeepSeek Harness.",
   "author": "fleekelon",
   "type": "module",
   "main": "./index.js",
@@ -21,7 +21,8 @@
     "locale",
     "lib",
     "skills",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "keywords": [
     "dsh-plugin",
@@ -42,7 +43,7 @@
     "url": "git+https://github.com/fleekelon/dsh-fintax.git"
   },
   "scripts": {
-    "test": "node --test test/calc.test.js"
+    "test": "node --test"
   },
   "dsh": {
     "bundle": {

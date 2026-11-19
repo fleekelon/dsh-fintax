@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "FinTax workbench",
-    "description": "Standalone DSH sidebar FinTax workbench: zero-token drag-and-drop Amazon/TikTok/Temu/Shopify/Stripe & .zip statement auditor, 7 interactive tax calculators, printable HTML boss reports, and Tencent IMA policy Q&A."
+    "description": "DSH sidebar workbench for offline statements and .zip archives from eight platforms and wallets, four tax and accounting figures with separate payout reconciliation, 10 tax calculators, rolling 12-month risk screening, printable reports and CSV exports, and Tencent IMA policy search."
   }
 }

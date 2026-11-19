@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "财税工作台",
-    "description": "DSH 左侧边栏独立财税工作台：0 Token 拖入 Amazon/TikTok/Temu/Shopify/Stripe 原始账单与 .zip 离线排雷、7 大确定性交互算税、导出老板 HTML 体检单及腾讯 IMA 政策引证。"
+    "description": "DSH 侧边栏财税工作台，支持 8 大跨境平台及资金池账单和 .zip 离线排雷、四层口径与独立资金桥接、10 项交互算税、12 个月滚动风险初筛、诊断报告与异常 CSV 导出，以及腾讯 IMA 政策检索。"
   }
 }

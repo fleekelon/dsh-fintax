@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   imaCall,
+  searchImaKnowledge,
   loadCredentials,
   loadFintaxSettings,
   saveCredentials,
@@ -22,10 +23,12 @@ import { parsePlatformStatement, parseStatementBuffer, fmtAmount, toNumber2 } fr
 import {
   buildConsolidatedReconcile,
   exportDiagnosticReport,
+  renderAnomaliesCsv,
   renderDiagnosticReportHtml,
   renderDiagnosticReportMd,
   serializeSummary,
 } from './lib/report.js'
+import { computeRolling12m, deleteSnapshot, loadHistory, saveSnapshot } from './lib/history.js'
 
 const PKG_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_VERSION = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version
@@ -231,6 +234,7 @@ export function createFintaxApiHandler({ getConnection }) {
 
         const reportHtml = renderDiagnosticReportHtml({ summaries, consolidated, version: PKG_VERSION })
         const reportMd = renderDiagnosticReportMd({ summaries, consolidated, version: PKG_VERSION })
+        const anomaliesCsv = renderAnomaliesCsv({ summaries })
 
         return send(200, {
           ok: true,
@@ -240,7 +244,35 @@ export function createFintaxApiHandler({ getConnection }) {
           consolidated,
           reportHtml,
           reportMd,
+          anomaliesCsv,
         })
+      }
+
+      if (subPath === '/history' && method === 'GET') {
+        const history = loadHistory()
+        return send(200, { ok: true, history, rolling12m: computeRolling12m(history) })
+      }
+
+      if (subPath === '/history' && method === 'POST') {
+        const body = await readJsonBody(req, 65_536)
+        try {
+          const saved = saveSnapshot(body || {})
+          return send(200, { ok: true, ...saved })
+        } catch (histErr) {
+          return send(400, { error: histErr?.message || '保存体检快照失败' })
+        }
+      }
+
+      if ((subPath === '/history' || subPath.startsWith('/history/')) && method === 'DELETE') {
+        const id = subPath.startsWith('/history/')
+          ? decodeURIComponent(subPath.slice('/history/'.length))
+          : (url.searchParams.get('id') ?? '')
+        try {
+          const resDel = deleteSnapshot(id)
+          return send(200, { ok: true, ...resDel })
+        } catch (delErr) {
+          return send(400, { error: delErr?.message || '删除快照失败' })
+        }
       }
 
       return send(404, { error: `未知接口：${method} ${subPath}` })
@@ -294,12 +326,12 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'ima_search',
     description:
-      '在 IMA 知识库内搜索政策原文与底稿条目，返回 media_id、标题和命中摘要。若用户已在设置页绑定默认知识库，knowledge_base_id 可省略。',
+      '在 IMA 知识库内搜索政策原文与底稿条目，返回 media_id、标题和命中摘要。首屏长问题少于 2 条时自动尝试最多 3 组财税短词。绑定默认知识库后可省略 knowledge_base_id。',
     parameters: {
       query: {
         type: 'string',
         required: true,
-        description: '搜索关键词。IMA 搜索对多词组合敏感：优先用短单一关键词（如“报送”“退运”“9810”），空结果时换词重试。',
+        description: '可传用户原始问题，也可传明确的关键词，例如“退运”或“9810”。',
       },
       knowledge_base_id: {
         type: 'string',
@@ -318,14 +350,17 @@ export function apply(ctx) {
           throw new Error('query（搜索关键词）不能为空；若想直接浏览目录请改用 ima_browse')
         }
         if (!loadCredentials()) return CREDENTIALS_HELP
-        const data = await imaCall('openapi/wiki/v1/search_knowledge', {
+        const data = await searchImaKnowledge({
           query: String(args.query).trim(),
           knowledge_base_id: kbId,
           cursor: args.cursor ?? '',
         })
         const list = data.info_list ?? []
+        const fallback = data.fallback?.queries.length
+          ? `短词补查：${data.fallback.queries.join('、')}${data.fallback.failed ? `（${data.fallback.failed} 组查询失败）` : ''}。`
+          : ''
         if (!Array.isArray(list) || list.length === 0) {
-          return `知识库 ${kbId} 中未搜到「${args.query}」。可换更短的同义词重试，或用 ima_browse 浏览目录。`
+          return [`知识库 ${kbId} 中未搜到「${args.query}」。`, fallback, '可换更短的同义词重试，或用 ima_browse 浏览目录。'].filter(Boolean).join('\n')
         }
         const items = list.map((it) => {
           const isFolder = it.media_type === 99 || String(it.media_id ?? '').startsWith('folder_')
@@ -339,8 +374,9 @@ export function apply(ctx) {
         })
         return [
           `[库 ${kbId}] 命中 ${items.length} 条（query: ${args.query}）：`,
+          ...(fallback ? [fallback] : []),
           JSON.stringify(items, null, 2),
-          data.is_end === false ? `还有更多结果，next_cursor: ${data.next_cursor}` : '已到末尾。',
+          data.is_end === false && data.next_cursor ? `原查询还有更多结果，next_cursor: ${data.next_cursor}` : '原查询已到末尾。',
           '若命中文件夹（kind 为 folder），请将 media_id 作为 folder_id 传给 ima_browse 展开；引用文档前请用 ima_read 读取原文并核对文号。',
         ].join('\n')
       })
@@ -470,15 +506,18 @@ export function apply(ctx) {
     },
   })
 
-  // ── 工具 5：7 场景确定性税额与差额对账引擎 ──────────────────
+  // ── 工具 5：10 场景确定性税额与差额对账引擎 ──────────────────
   ctx.tools.register({
     name: 'fintax_calc',
     description:
-      '确定性财税试算与对账引擎（免配 IMA 亦可离线运行，严禁 LLM 心算替代），支持 7 大场景：' +
-      'platform_tax_reconcile 平台涉税报送 vs 结算放款 vs 纳税申报四层口径差额桥接核对（含净额法误报佣金冲收入自动排雷）；' +
+      '确定性财税试算与对账引擎（免配 IMA 亦可离线运行，严禁 LLM 心算替代），支持 10 大场景：' +
+      'platform_tax_reconcile 对照平台报送、财务会计、增值税与出口、企业所得税四个口径，并独立核对资金放款；' +
       'export_invoice_breakeven 供应商开票加点「拿专票退税 vs 合规无票免税」毛利临界点与所得税联动测算；' +
       'export_rebate 外贸企业出口免退税（孰低规则+征退税率差转成本）；' +
-      'cbec_assessed_cit 综试区零售出口4%核定征收企业所得税（含300万/7500万小微悬崖预警）；' +
+      'export_rebate_manufacturer 生产企业出口“免、抵、退”税五步法测算（含免抵税额计征附加税预警）；' +
+      'cbec_assessed_cit 综试区零售出口4%核定应税所得率及小型微利企业条件试算；' +
+      'cbec_return_duty_exempt 2026年第16号公告跨境电商出口退运专项资格与条件测算（2026–2027申报，1210按出区离境起算）；' +
+      'vat_taxpayer_threshold 500万一般纳税人强制认定临界与进项专票抵扣拐点测算；' +
       'annual_bonus_iit 年终奖单独计税个税（含多发一元临界点陷阱检测）；' +
       'cross_border_import 跨境电商零售进口综合税（限额内70%口径+超限预警）；' +
       'vat 增值税价税分离。',
@@ -487,16 +526,19 @@ export function apply(ctx) {
         type: 'string',
         required: true,
         description:
-          'platform_tax_reconcile | export_invoice_breakeven | export_rebate | cbec_assessed_cit | annual_bonus_iit | cross_border_import | vat',
+          'platform_tax_reconcile | export_invoice_breakeven | export_rebate | export_rebate_manufacturer | cbec_assessed_cit | cbec_return_duty_exempt | vat_taxpayer_threshold | annual_bonus_iit | cross_border_import | vat',
       },
       params: {
         type: 'object',
         required: true,
         description:
-          'platform_tax_reconcile: {reportedGrossRevenue, refunds=0, marketplaceWithheldTax=0, cutoffAndFxDiff=0, platformFees=0, subsidies=0, selfRemitTaxNet=0, reserveChange=0, actualPayout?, declaredVatSales?, principalRole="principal"}；' +
+          'platform_tax_reconcile: {reportedGrossRevenue, reportedGrossSource="platform"|"statement_reference", refunds=0, accountingRevenue?, declaredVatSales?, citTaxableIncome?, marketplaceWithheldTax=0, withheldTaxIncludedInGross=true, cutoffAndFxDiff=0, platformFees=0, subsidies=0, subsidiesIncludedInGross=false, selfRemitTaxNet=0, reserveChange=0, actualPayout?, principalRole="principal"}，实际报送总额已含补贴时设 subsidiesIncludedInGross=true；' +
           'export_invoice_breakeven: {barePurchaseAmount, supplierMarkupRate, vatRate=0.13, rebateRate=vatRate, exportRevenue?, otherDeductibleExpenses=0, invoicedCitRate=0.05, noInvoiceRevenueCitRate=0.002}；' +
           'export_rebate: {purchaseAmount, vatRate=0.13, rebateRate=vatRate}；' +
-          'cbec_assessed_cit: {revenue, taxableIncomeRate=0.04, citRate=0.25, smallLowProfit=false}；' +
+          'export_rebate_manufacturer: {exportFobCny, totalInputVat, vatRate=0.13, rebateRate=vatRate, dutyFreeMaterialsCny=0, domesticOutputVat=0, priorCreditCarryover=0}；' +
+          'cbec_assessed_cit: {revenue, assessedQualificationConfirmed?, taxableIncomeRate=0.04, citRate=0.25, taxYear?, annualTaxableIncome?, annualAverageEmployees?, annualAverageAssets?, nonRestrictedIndustry?, smallLowProfit?}，revenue 填同一主体同一纳税年度收入；' +
+          'cbec_return_duty_exempt: {customsCode, exportValueCny, exportDate, returnDate, departureDate?, zoneExitDate?, returnedOutsideZone?, returnReason="unsold"|"customer_return"|"other", tariffRate=0.10, importVatRate=0.13, consumptionTaxRate=0, inOriginalCondition, isFood, refundedExportTax, exportRefundRepaid?, hasTaxCertificate}，日期 YYYY-MM-DD，1210 需填出区离境日期和是否退回境内区外；' +
+          'vat_taxpayer_threshold: {rolling12mTaxableSales, projectedAnnualGrossSales?, deductibleCostRatio=0.65, inputVatRate=0.13, generalOutputRate=0.13, smallScaleRate=0.01, hasExportRebateDemand=true, taxPeriod?="month"|"quarter", periodTaxableSales?, periodWaivedSales=0}，月/季起征点需同时填计税期间和不含税销售额；' +
           'annual_bonus_iit: {bonus}；' +
           'cross_border_import: {price, vatRate=0.13, consumptionTaxRate=0, discount=0.7, singleLimit=5000, annualLimit=26000, annualUsed=0}；' +
           'vat: {amount, rate=0.13, inclusive=true}。比例/税率均传 0~1 小数。',
@@ -532,15 +574,15 @@ export function apply(ctx) {
     },
   })
 
-  // ── 工具 6：跨境平台原始结算账单本地初筛体检与异常雷达 (v0.5 升级) ──
+  // ── 工具 6：跨境平台原始结算账单本地初筛体检与异常雷达 (v0.7 升级 8 大平台) ──
   ctx.tools.register({
     name: 'fintax_parse_statement',
     description:
-      '本地离线解析跨境电商官方导出的原始结算账单（支持 Amazon、TikTok Shop、Temu 半托管/全托管、Shopify 独立站、Stripe 的 .csv/.tsv/.txt/.xlsx 及 .zip 压缩包直拖，兼容 UTF-16，亦支持传 demo:all 免文件体验）。采用 BigInt 定点运算精确到分，输出四层口径拆解、水平守恒校验、多币种合并人民币总对账、7500万小微悬崖预警及 P0/P1/P2 异常雷达，并支持一键导出可发给老板审阅的 HTML/Markdown 税务初筛体检诊断书。',
+      '本地离线解析跨境电商 8 大平台与资金池原始结算账单（支持 Amazon、TikTok Shop、Temu、速卖通 AliExpress、Shopee、Shopify、PayPal、Stripe 的 .csv/.tsv/.txt/.xlsx、.zip 及 UTF-16，也可试用 demo:all / demo:v7 / demo:full）。输出报送参考数、资金勾稽、多币种初筛与 P0/P1/P2 异常，支持导出 HTML/Markdown 诊断书或异常 CSV。',
     parameters: {
       file_path: {
         type: 'string',
-        description: '本机账单文件路径（支持 .csv / .tsv / .txt / .xlsx / .zip，或传 demo:all / demo:temu / demo:shopify 免文件体验）。与 file_paths 二选一即可。',
+        description: '本机账单文件路径（支持 .csv / .tsv / .txt / .xlsx / .zip，或传 demo:all / demo:v7 / demo:full / demo:paypal / demo:aliexpress / demo:shopee 免文件体验）。与 file_paths 二选一即可。',
       },
       file_paths: {
         type: 'array',
@@ -549,7 +591,7 @@ export function apply(ctx) {
       },
       platform: {
         type: 'string',
-        description: 'auto（默认自动识别表头）| amazon | tiktok | temu | shopify | stripe',
+        description: 'auto（默认自动识别表头）| amazon | tiktok | temu | aliexpress | shopee | shopify | paypal | stripe',
       },
       fx_rate_to_cny: {
         type: 'number',
@@ -557,7 +599,7 @@ export function apply(ctx) {
       },
       fx_rates: {
         type: 'object',
-        description: '可选：多币种汇率映射（如 {"USD": 7.18, "EUR": 7.82, "GBP": 9.15, "AUD": 4.72}），用于多站点/多币种合并折算总对账。',
+        description: '可选：多币种汇率映射（如 {"USD": 7.18, "EUR": 7.82, "MYR": 1.62, "SGD": 5.36}），用于多站点/多币种合并折算总对账。',
       },
       declared_vat_sales_cny: {
         type: 'number',
@@ -565,7 +607,7 @@ export function apply(ctx) {
       },
       export_report_path: {
         type: 'string',
-        description: '可选：导出本地《税务初筛体检诊断书》路径（传 "auto" 自动在账单同目录生成可打印 .html 汇报单，传 "auto.md" 生成 Markdown，或指定具体 .html/.md 路径）。',
+        description: '可选：导出本地报告路径（传 "auto" 自动生成可打印 .html 汇报单，"auto.md" 生成 Markdown，"auto.csv" 生成全量异常排雷 CSV，或指定具体路径）。',
       },
     },
     output: textOutput,
@@ -602,13 +644,13 @@ export function apply(ctx) {
           const p2 = s.anomalies.filter((a) => a.severity.startsWith('P2'))
 
           const lines = [
-            `【跨境原始账单四层口径初筛体检报告｜${s.platform} · ${s.site} · ${ccy}】`,
+            `【跨境原始账单初筛体检报告｜${s.platform} · ${s.site} · ${ccy}】`,
             `· 文件与格式：${s.fileName} — ${s.formatLabel}`,
             `· 识别期间：${s.period} | 有效明细行数：${s.rawRowCount} 行`,
-            `── 一、原币四层口径精确拆解（单位：${ccy}，精确到 0.01）──`,
+            `── 一、原币报送参考与结算项目（单位：${ccy}，精确到 0.01）──`,
             `· ① 商品含运费原价总额：${fmtAmount(s.grossSales)}`,
             `· ② 减：商家承担促销折扣：${fmtAmount(s.sellerDiscount)}`,
-            `· ★ 平台涉税报送参考收入总额（①−②，未扣佣金与退款）：${fmtAmount(s.taxReportingGrossRef)}`,
+            `· ★ 账单推算报送参考毛额（①−②）：${fmtAmount(s.taxReportingGrossRef)}；正式报送总额请核对实际报送单及补贴归属。`,
             `· ③ 加：平台出资补贴 / 库存赔付：${fmtAmount(s.platformSubsidy)}`,
             `· ④ 减：客户退款本金：${fmtAmount(s.customerRefund)}`,
             `· ⑤~⑨ 平台与履约费用合计（主要责任人须单独列支成本费用，严禁直接冲减收入）：${fmtAmount(s.totalFees)}`,
@@ -620,9 +662,9 @@ export function apply(ctx) {
             `· 已自动剥离（商城代扣代缴流转税，不计入收入）：${fmtAmount(s.facilitatorTaxStripped)}`,
             `· ⑩ 非代扣待卖家自申报流转税净流入（应计其他应付款，勿混入收入）：${fmtAmount(s.selfRemitTaxNet)}`,
             `· ⑪ 冻结准备金/保证金净变动（+新增冻结 / -释放前期）：${fmtAmount(s.reserveNetChange)}`,
-            `── 二、账单内部勾稽核验 ──`,
+            `── 二、资金桥接与账单内部勾稽 ──`,
             `· 行内水平守恒校验：差额 ${fmtAmount(s.horizontalDiffTotal)} ${ccy}（${s.horizontalDiffTotal === 0n ? '✔ 全部明细行水平守恒通过' : '❌ 存在行内不守恒阻断项，见下方异常雷达'}）`,
-            `· 理论应放款净额：${fmtAmount(s.theoreticalPayout)} ${ccy} | 账单内提取实际打款（Payout）：${fmtAmount(s.actualPayout)} ${ccy} | 账单内放款差额：${fmtAmount(s.statementPayoutDiff)} ${ccy}`,
+            `· 理论应放款净额：${fmtAmount(s.theoreticalPayout)} ${ccy} | 账单内提取实际打款（Payout）：${fmtAmount(s.actualPayout)} ${ccy} | 放款差额（实际 − 理论，正为多放、负为少放）：${fmtAmount(s.statementPayoutDiff)} ${ccy}`,
           ]
 
           if (s.statementPayoutDiff !== 0n && s.horizontalDiffTotal === 0n) {
@@ -677,7 +719,7 @@ export function apply(ctx) {
               ),
               ...consolidated.reconcile.steps.map((st) => `· ${st}`),
               ...consolidated.reconcile.warnings.map((w) => `⚠ ${w}`),
-              `· 7,500万小微核定红线进度：当前合并净销售额占 7,500 万元红线的 ${consolidated.cliffRatioPct}%`,
+              `· 4% 核定收入等值初筛：当前合并报送参考净额为 7,500 万元等值的 ${consolidated.cliffRatioPct}%。年度应纳税所得额须按主体另行核定。`,
             ]
             if (consolidated.cliffAlert) cLines.push(consolidated.cliffAlert)
             if (consolidated.p0Count > 0) {
@@ -757,7 +799,7 @@ export function apply(ctx) {
     })
   }
 
-  console.log(`[fintax] 财税工作台 v${PKG_VERSION} 已加载：6 个工具（含原始账单离线体检雷达 + 7 大确定性场景）+ 4 个技能`)
+  console.log(`[fintax] 财税工作台 v${PKG_VERSION} 已加载：6 个工具（8 大平台账单离线体检雷达 + 10 大确定性算税场景 + 12 个月滚年归档）+ 4 个技能`)
 }
 
 /** 极简 frontmatter 解析：只取 name / description（单行值），其余交给正文。 */
