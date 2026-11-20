@@ -658,7 +658,7 @@ export function apply(ctx) {
         return [
           `media_id: ${mediaId} 的条目信息：`,
           JSON.stringify(mediaInfo, null, 2),
-          '请在 IMA 内打开条目核对原文。',
+          '请在 IMA 内打开条目核对原文（图片/官方网页条目请直接在 IMA 客户端查阅原图或原文链接）。',
         ].join('\n')
       })
     },

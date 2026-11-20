@@ -172,3 +172,23 @@ test('IMA：使用外部 25 道真实问句验证离线短词回退', {
     assert.deepEqual(after.fallback, { queries, failed: 0 }, label)
   }
 })
+
+test('IMA：V2.3 新增专题短词回退覆盖 T86、欧盟处理费、全托管与独立站', async (t) => {
+  const cases = [
+    ['美国800美元T86小额豁免暂停怎么办', 'T86'],
+    ['欧盟2欧元处理费实行后低值包裹怎么算', '欧盟低值包裹'],
+    ['Temu全托管半托管结算单和退税主体核对', '全托管'],
+    ['独立站Shopify和Stripe资金桥接怎么防重复', '独立站'],
+    ['2026年末关账跨年未发货收入和股东借款死线', '年末关账'],
+  ]
+  for (const [query, expectedTerm] of cases) {
+    let seen = []
+    mockSearch(t, ({ query: sent }) => {
+      seen.push(sent)
+      return result(sent === expectedTerm ? [item(expectedTerm)] : [])
+    })
+    const res = await searchImaKnowledge(request(query), opts)
+    assert.ok(res.fallback?.queries?.includes(expectedTerm), `expected ${expectedTerm} in ${JSON.stringify(res.fallback?.queries)} for "${query}"`)
+    assert.deepEqual(res.info_list, [item(expectedTerm)])
+  }
+})
