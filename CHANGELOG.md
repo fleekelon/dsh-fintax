@@ -2,6 +2,13 @@
 
 All notable changes to `dsh-fintax` will be documented in this file.
 
+## [0.8.2] - 2026-11-20
+
+### Fixed
+- **DSH Desktop Split-Pane Horizontal Clipping (`client.js`)**:
+  - Replaced viewport-only `@media (max-width: 860px)` breakpoints with CSS Container Queries (`container-type: inline-size; container-name: ftx; @container ftx (max-width: 960px)`), so DSH Desktop's nested main pane (when left navigation and right panels are open inside a wide window) stacks cleanly without right-edge clipping.
+  - Replaced fixed `minmax(300px, ...) minmax(340px, ...)` and fixed `224px` SVG dial widths with `minmax(0, ...)` tracks, proportional `aspect-ratio` SVG scaling, `clamp()` fluid typography, `min-width: 0` / `flex: 1 1 0%` flex containment, and single-line ellipsis truncation on long IMA knowledge-base badges (`.ftx-kb-pill`).
+
 ## [0.8.1] - 2026-11-20
 
 ### Fixed & Improved (Real-World Monthly Close Hardening)

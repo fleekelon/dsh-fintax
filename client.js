@@ -480,64 +480,71 @@ window.__ModuleLoader__.load({
         --ftx-cap-hi: #e9e9df;
       }
       .ftx-root * { box-sizing: border-box; }
+      .ftx-host-wrap { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; overflow-x: hidden; }
+      .ftx-root { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; overflow-x: hidden; container-type: inline-size; container-name: ftx; }
       .ftx-mono { font-family: var(--ftx-mono); font-variant-numeric: tabular-nums; }
-      .ftx-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
-      .ftx-h1 { display: flex; align-items: baseline; gap: 10px; font-size: 25px; font-weight: 700; letter-spacing: -0.8px; margin: 0; line-height: 1.25; }
+      .ftx-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px 12px; min-width: 0; max-width: 100%; }
+      .ftx-h1 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; font-size: 24px; font-weight: 700; letter-spacing: -0.8px; margin: 0; line-height: 1.25; min-width: 0; }
       .ftx-h1 span { font: 12.5px var(--ftx-mono); color: var(--ftx-mut); letter-spacing: 0; font-weight: 500; }
-      .ftx-kb-pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--ftx-chassis-bd); border-radius: 4px; padding: 6px 11px; font-size: 12px; color: var(--ftx-ink); background: var(--ftx-surface); }
+      .ftx-kb-pill { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; min-width: 0; border: 1px solid var(--ftx-chassis-bd); border-radius: 4px; padding: 6px 11px; font-size: 12px; color: var(--ftx-ink); background: var(--ftx-surface); }
+      .ftx-kb-pill-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
       .ftx-kb-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-      .ftx-tabs { display: flex; align-items: stretch; flex-wrap: wrap; gap: 26px; border-bottom: 1px solid var(--ftx-chassis-bd); }
-      .ftx-tab { position: relative; padding: 10px 2px 11px; font-size: 13.5px; font-weight: 500; color: var(--ftx-mut); background: transparent; border: none; cursor: pointer; transition: color 0.15s; }
+      .ftx-tabs { display: flex; align-items: stretch; flex-wrap: wrap; gap: 4px 20px; border-bottom: 1px solid var(--ftx-chassis-bd); min-width: 0; max-width: 100%; }
+      .ftx-tab { position: relative; padding: 10px 2px 11px; font-size: 13.5px; font-weight: 500; color: var(--ftx-mut); background: transparent; border: none; cursor: pointer; transition: color 0.15s; white-space: nowrap; }
       .ftx-tab:hover { color: var(--ftx-ink); }
       .ftx-tab.is-active { color: var(--ftx-ink); font-weight: 700; }
       .ftx-tab.is-active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; background: var(--ftx-ink); }
-      .ftx-local-tag { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ftx-mut); padding: 8px 0; }
-      .ftx-local-tag i { width: 7px; height: 7px; border: 1.2px solid var(--ftx-mut); border-radius: 50%; display: inline-block; }
+      .ftx-local-tag { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ftx-mut); padding: 8px 0; white-space: nowrap; }
+      .ftx-local-tag i { width: 7px; height: 7px; border: 1.2px solid var(--ftx-mut); border-radius: 50%; display: inline-block; flex-shrink: 0; }
       .ftx-instrument {
-        display: grid; grid-template-columns: minmax(300px, 45.5%) minmax(340px, 54.5%);
+        display: grid; grid-template-columns: minmax(0, 44.5%) minmax(0, 55.5%);
+        width: 100%; max-width: 100%;
         background: var(--ftx-chassis); border: 1px solid var(--ftx-chassis-bd); border-radius: 7px;
         box-shadow: inset 0 1px rgba(255,255,246,0.55), 0 2px 5px rgba(45,50,38,0.12);
         position: relative;
       }
-      @media (max-width: 860px) { .ftx-instrument { grid-template-columns: 1fr; } .ftx-inst-left { border-right: none !important; border-bottom: 1px solid var(--ftx-line); } }
+      @container ftx (max-width: 960px) { .ftx-instrument { grid-template-columns: minmax(0, 1fr); } .ftx-inst-left { border-right: none !important; border-bottom: 1px solid var(--ftx-line); } }
+      @media (max-width: 960px) { .ftx-instrument { grid-template-columns: minmax(0, 1fr); } .ftx-inst-left { border-right: none !important; border-bottom: 1px solid var(--ftx-line); } }
       .ftx-screw { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: linear-gradient(135deg, #fbfbf1, #9fa495); border: 1px solid #9ea395; pointer-events: none; z-index: 2; }
       .ftx-screw::after { content: ""; position: absolute; height: 1px; left: 1px; right: 1px; top: 3.5px; background: #6d7265; transform: rotate(-38deg); }
       .ftx-screw.tl { top: 8px; left: 8px; } .ftx-screw.tr { top: 8px; right: 8px; } .ftx-screw.bl { bottom: 8px; left: 8px; } .ftx-screw.br { bottom: 8px; right: 8px; }
-      .ftx-inst-left, .ftx-inst-right { min-width: 0; padding: 16px 21px 14px; display: flex; flex-direction: column; }
+      .ftx-inst-left, .ftx-inst-right { min-width: 0; max-width: 100%; padding: 15px 19px 14px; display: flex; flex-direction: column; }
       .ftx-inst-left { border-right: 1px solid var(--ftx-chassis-bd); }
-      .ftx-inst-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 700; gap: 8px; }
+      .ftx-inst-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 14px; font-weight: 700; gap: 6px 8px; min-width: 0; }
       .ftx-inst-head small { color: var(--ftx-mut); font: 10.5px var(--ftx-mono); letter-spacing: 1.1px; }
       .ftx-lcd {
         margin: 11px 0 13px; padding: 14px 16px 12px; border: 1px solid var(--ftx-lcd-bd); border-radius: 3px;
-        background: var(--ftx-lcd); box-shadow: inset 0 2px 5px rgba(70,84,52,0.22);
+        background: var(--ftx-lcd); box-shadow: inset 0 2px 5px rgba(70,84,52,0.22); min-width: 0;
       }
       .ftx-lcd.warn { background: var(--ftx-lcd-warn); border-color: var(--ftx-gap-bd); }
-      .ftx-lcd-lbl { font-size: 12px; display: flex; align-items: center; justify-content: space-between; color: var(--ftx-lcd-ink); opacity: 0.78; }
-      .ftx-lcd-big { margin-top: 3px; font: 600 54px/1.08 var(--ftx-disp); font-variant-numeric: tabular-nums; letter-spacing: -1.8px; color: var(--ftx-lcd-ink); word-break: break-all; }
-      .ftx-lcd-big .unit { font-size: 34px; vertical-align: 4px; margin-right: 4px; font-weight: 400; }
-      .ftx-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-      .ftx-metrics > div + div { padding-left: 14px; border-left: 1px solid var(--ftx-line); }
+      .ftx-lcd-lbl { font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ftx-lcd-ink); opacity: 0.78; }
+      .ftx-lcd-big { margin-top: 3px; font: 600 clamp(32px, 5.2cqi, 54px)/1.08 var(--ftx-disp); font-variant-numeric: tabular-nums; letter-spacing: -1.6px; color: var(--ftx-lcd-ink); word-break: break-all; }
+      .ftx-lcd-big .unit { font-size: 0.64em; vertical-align: 4px; margin-right: 4px; font-weight: 400; }
+      .ftx-metrics { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+      .ftx-metrics > div { min-width: 0; }
+      .ftx-metrics > div + div { padding-left: 12px; border-left: 1px solid var(--ftx-line); }
       .ftx-metrics label { font-size: 11.5px; color: var(--ftx-mut); display: block; margin-bottom: 3px; }
-      .ftx-metrics b { font: 600 24px/1.1 var(--ftx-mono); letter-spacing: -0.8px; }
-      .ftx-scan { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; border-top: 1px solid var(--ftx-line); margin-top: auto; padding-top: 11px; color: var(--ftx-mut); font-size: 11.5px; }
-      .ftx-scan .probe { width: 6px; height: 6px; border-radius: 50%; background: var(--ftx-ok); }
+      .ftx-metrics b { font: 600 clamp(17px, 2.8cqi, 24px)/1.1 var(--ftx-mono); letter-spacing: -0.6px; word-break: break-all; }
+      .ftx-scan { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; border-top: 1px solid var(--ftx-line); margin-top: auto; padding-top: 11px; color: var(--ftx-mut); font-size: 11.5px; min-width: 0; }
+      .ftx-scan .probe { width: 6px; height: 6px; border-radius: 50%; background: var(--ftx-ok); flex-shrink: 0; }
       .ftx-scan .vsep { height: 10px; width: 1px; background: var(--ftx-line); }
-      .ftx-meters { display: grid; grid-template-columns: 1fr 1fr; margin-top: 10px; border-radius: 4px; border: 1px solid var(--ftx-chassis-bd); background: var(--ftx-well); box-shadow: inset 0 2px 4px rgba(80,86,72,0.14); }
-      @media (max-width: 540px) { .ftx-meters { grid-template-columns: 1fr; } .ftx-gauge + .ftx-gauge { border-left: none !important; border-top: 1px solid var(--ftx-line); } }
+      .ftx-meters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin-top: 10px; border-radius: 4px; border: 1px solid var(--ftx-chassis-bd); background: var(--ftx-well); box-shadow: inset 0 2px 4px rgba(80,86,72,0.14); width: 100%; max-width: 100%; }
+      @container ftx (max-width: 440px) { .ftx-meters { grid-template-columns: minmax(0, 1fr); } .ftx-gauge + .ftx-gauge { border-left: none !important; border-top: 1px solid var(--ftx-line); } }
+      @media (max-width: 440px) { .ftx-meters { grid-template-columns: minmax(0, 1fr); } .ftx-gauge + .ftx-gauge { border-left: none !important; border-top: 1px solid var(--ftx-line); } }
       .ftx-gauge { min-width: 0; text-align: center; display: flex; flex-direction: column; align-items: center; padding: 12px 6px 10px; }
       .ftx-gauge + .ftx-gauge { border-left: 1px solid var(--ftx-line); }
-      .ftx-ghead { font-size: 12.5px; font-weight: 650; display: flex; gap: 6px; align-items: center; }
-      .ftx-ghead span { font: 10px var(--ftx-mono); color: var(--ftx-mut); border: 1px solid var(--ftx-line); padding: 0 4px; border-radius: 2px; }
-      .ftx-meter { width: 224px; max-width: 100%; height: 134px; margin-top: -2px; display: block; }
+      .ftx-ghead { font-size: 12.5px; font-weight: 650; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 6px; align-items: center; line-height: 1.3; }
+      .ftx-ghead span { font: 10px var(--ftx-mono); color: var(--ftx-mut); border: 1px solid var(--ftx-line); padding: 0 4px; border-radius: 2px; flex-shrink: 0; }
+      .ftx-meter { width: 100%; max-width: 210px; height: auto; aspect-ratio: 220 / 132; margin-top: -2px; display: block; }
       .ftx-tick { stroke: var(--ftx-tick); } .ftx-tick-warn { stroke: var(--ftx-tick-warn); }
       .ftx-arc-bg { stroke: var(--ftx-arc-bg); } .ftx-arc-warn { stroke: var(--ftx-orange); }
       .ftx-dial-lbl { fill: var(--ftx-mut); font-family: var(--ftx-mono); }
-      .ftx-gval { margin-top: -8px; font: 700 22px/1.1 var(--ftx-mono); letter-spacing: -0.8px; }
-      .ftx-gfoot { font-size: 10.5px; color: var(--ftx-mut); margin-top: 2px; }
+      .ftx-gval { margin-top: -6px; font: 700 clamp(18px, 2.8cqi, 22px)/1.1 var(--ftx-mono); letter-spacing: -0.8px; }
+      .ftx-gfoot { font-size: 10.5px; color: var(--ftx-mut); margin-top: 2px; line-height: 1.35; padding: 0 4px; }
       .ftx-gfoot i { font-style: normal; color: var(--ftx-orange); }
-      .ftx-lower { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; }
-      .ftx-block { border-top: 2px solid var(--ftx-line-strong); padding-top: 13px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-      .ftx-bhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+      .ftx-lower { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; width: 100%; max-width: 100%; }
+      .ftx-block { border-top: 2px solid var(--ftx-line-strong); padding-top: 13px; min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 10px; }
+      .ftx-bhead { display: flex; align-items: center; justify-content: space-between; gap: 8px 10px; flex-wrap: wrap; min-width: 0; }
       .ftx-bhead h2 { font-size: 18px; font-weight: 700; letter-spacing: -0.4px; margin: 0; }
       .ftx-secmeta { font: 10px var(--ftx-mono); color: var(--ftx-mut); letter-spacing: 0.9px; }
       .ftx-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -546,15 +553,16 @@ window.__ModuleLoader__.load({
       .ftx-tbl td { padding: 10px 8px; border-bottom: 1px solid var(--ftx-line); font-family: var(--ftx-mono); text-align: right; white-space: nowrap; vertical-align: middle; }
       .ftx-tbl tr:hover td { background: color-mix(in srgb, currentColor 3.5%, transparent); }
       .ftx-tbl strong { font-family: inherit; font-weight: 700; font-size: 13px; }
-      .ftx-gap { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border: 1px solid var(--ftx-gap-bd); color: var(--ftx-gap-fg); background: var(--ftx-gap-bg); padding: 9px 12px; border-radius: 3px; }
+      .ftx-gap { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border: 1px solid var(--ftx-gap-bd); color: var(--ftx-gap-fg); background: var(--ftx-gap-bg); padding: 9px 12px; border-radius: 3px; min-width: 0; max-width: 100%; }
       .ftx-gap .att { display: inline-grid; place-items: center; color: #fff7e9; background: var(--ftx-orange); border-radius: 3px; width: 19px; height: 19px; font: 700 13px var(--ftx-mono); flex-shrink: 0; }
       .ftx-gap b { font: 700 21px/1 var(--ftx-mono); color: var(--ftx-orange); letter-spacing: -0.6px; }
-      .ftx-risk-row { display: grid; grid-template-columns: 30px 1fr max-content; align-items: start; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--ftx-line); font-size: 12.8px; }
+      .ftx-risk-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) max-content; align-items: start; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--ftx-line); font-size: 12.8px; }
       .ftx-sev { display: inline-grid; place-items: center; font: 600 10.5px var(--ftx-mono); height: 20px; border-radius: 2px; width: 28px; background: var(--ftx-th-bg); color: var(--ftx-mut); border: 1px solid var(--ftx-line); margin-top: 1px; }
       .ftx-sev.p0 { background: var(--ftx-orange); border-color: var(--ftx-orange); color: #fff8e9; }
       .ftx-sev.p1 { background: var(--ftx-gap-bg); border-color: var(--ftx-gap-bd); color: var(--ftx-gap-fg); }
-      .ftx-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 9px; border-top: 1px solid var(--ftx-chassis-bd); padding-top: 14px; }
-      .ftx-act { height: 44px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--ftx-chassis-bd); border-radius: 4px; background: var(--ftx-btn-bg); color: var(--ftx-ink); font-size: 12.8px; font-weight: 600; cursor: pointer; transition: background 0.14s, border-color 0.14s, transform 0.12s; }
+      .ftx-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); gap: 9px; border-top: 1px solid var(--ftx-chassis-bd); padding-top: 14px; width: 100%; max-width: 100%; }
+      .ftx-act { height: 44px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--ftx-chassis-bd); border-radius: 4px; background: var(--ftx-btn-bg); color: var(--ftx-ink); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.14s, border-color 0.14s, transform 0.12s; min-width: 0; max-width: 100%; }
+      @container ftx (max-width: 620px) { .ftx-inst-left, .ftx-inst-right { padding: 13px 14px 12px; } .ftx-h1 { font-size: 20px; } }
       .ftx-act:hover:not(:disabled) { background: var(--ftx-btn-hover); transform: translateY(-0.5px); }
       .ftx-act:disabled { opacity: 0.5; cursor: not-allowed; }
       .ftx-act.pri { background: var(--ftx-btn-pri-bg); color: var(--ftx-btn-pri-fg); border-color: var(--ftx-btn-pri-bg); }
@@ -565,7 +573,7 @@ window.__ModuleLoader__.load({
       .ftx-btn-sm:hover:not(:disabled) { background: var(--ftx-btn-hover); }
       .ftx-btn-sm.on { background: var(--ftx-btn-pri-bg); color: var(--ftx-btn-pri-fg); border-color: var(--ftx-btn-pri-bg); }
       .ftx-btn-sm.danger { color: var(--ftx-orange); border-color: var(--ftx-gap-bd); background: transparent; }
-      .ftx-input { padding: 7px 10px; border-radius: 3px; border: 1px solid var(--ftx-chassis-bd); background: var(--ftx-input-bg); color: var(--ftx-ink); font-size: 13px; font-family: var(--ftx-mono); outline: none; }
+      .ftx-input { padding: 7px 10px; border-radius: 3px; border: 1px solid var(--ftx-chassis-bd); background: var(--ftx-input-bg); color: var(--ftx-ink); font-size: 13px; font-family: var(--ftx-mono); outline: none; max-width: 100%; min-width: 0; }
       .ftx-input:focus { border-color: var(--ftx-orange); box-shadow: 0 0 0 2px rgba(197,75,30,0.18); }
       .ftx-panel { background: var(--ftx-chassis); border: 1px solid var(--ftx-chassis-bd); border-radius: 6px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
       .ftx-nav-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px; text-align: left; padding: 8.5px 11px; border: none; border-radius: 3px; background: transparent; color: var(--ftx-ink); font-size: 12.8px; font-weight: 500; cursor: pointer; }
@@ -1592,7 +1600,7 @@ window.__ModuleLoader__.load({
         // 左侧 3 分组精密场景选择盘
         h(
           'div',
-          { className: 'ftx-panel', style: { flex: '1 1 248px', minWidth: 220, padding: '12px 10px', gap: 10 } },
+          { className: 'ftx-panel', style: { flex: '1 1 230px', minWidth: 0, maxWidth: '100%', padding: '12px 10px', gap: 10 } },
           ...groups.map((grp) => {
             const list = CALC_SCENARIOS.filter((x) => x.group === grp.key)
             return h(
@@ -1614,7 +1622,7 @@ window.__ModuleLoader__.load({
         // 右侧精密表单 + 橄榄绿 LCD 结论显示屏
         h(
           'div',
-          { style: { flex: '999 1 430px', minWidth: 280, display: 'flex', flexDirection: 'column', gap: 16 } },
+          { style: { flex: '999 1 360px', minWidth: 0, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: 16 } },
           h(
             'div',
             { className: 'ftx-panel' },
@@ -1627,8 +1635,8 @@ window.__ModuleLoader__.load({
             h('div', { style: { fontSize: 12.5, color: 'var(--ftx-mut)', lineHeight: 1.5, marginTop: -6 } }, sc.desc || t.fourLayers),
             h(
               'div',
-              { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))', gap: 12 } },
-              ...sc.fields.filter((f) => fieldApplies(f, vals)).map((f) => h('div', { key: f.key, style: { display: 'flex', flexDirection: 'column', gap: 5 } }, h('label', { style: { fontSize: 11.8, fontWeight: 650, color: 'var(--ftx-mut)' } }, f.label), renderFieldControl(f))),
+              { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 185px), 1fr))', gap: 12 } },
+              ...sc.fields.filter((f) => fieldApplies(f, vals)).map((f) => h('div', { key: f.key, style: { display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 } }, h('label', { style: { fontSize: 11.8, fontWeight: 650, color: 'var(--ftx-mut)' } }, f.label), renderFieldControl(f))),
             ),
             (sc.advancedFields || []).length > 0 &&
               h(
@@ -1638,8 +1646,8 @@ window.__ModuleLoader__.load({
                 showAdv &&
                   h(
                     'div',
-                    { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))', gap: 12 } },
-                    ...sc.advancedFields.filter((f) => fieldApplies(f, vals)).map((f) => h('div', { key: f.key, style: { display: 'flex', flexDirection: 'column', gap: 5 } }, h('label', { style: { fontSize: 11.8, fontWeight: 650, color: 'var(--ftx-mut)' } }, f.label), renderFieldControl(f))),
+                    { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 185px), 1fr))', gap: 12 } },
+                    ...sc.advancedFields.filter((f) => fieldApplies(f, vals)).map((f) => h('div', { key: f.key, style: { display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 } }, h('label', { style: { fontSize: 11.8, fontWeight: 650, color: 'var(--ftx-mut)' } }, f.label), renderFieldControl(f))),
                   ),
               ),
             h(
@@ -1743,9 +1751,9 @@ window.__ModuleLoader__.load({
           h('div', { style: { fontSize: 12.5, color: 'var(--ftx-mut)', lineHeight: 1.5 } }, t.credDesc),
           h(
             'div',
-            { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 12 } },
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 5 } }, h('label', { style: { fontSize: 12, fontWeight: 650, color: 'var(--ftx-mut)' } }, t.cidLabel), h('input', { type: 'password', autoComplete: 'off', className: 'ftx-input', value: clientId, placeholder: status.clientIdSet ? t.savedPlaceholder : t.emptyCidPlaceholder, onChange: (e) => setClientId(e.target.value) })),
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 5 } }, h('label', { style: { fontSize: 12, fontWeight: 650, color: 'var(--ftx-mut)' } }, t.keyLabel), h('input', { type: 'password', autoComplete: 'off', className: 'ftx-input', value: apiKey, placeholder: status.apiKeySet ? t.savedPlaceholder : t.emptyKeyPlaceholder, onChange: (e) => setApiKey(e.target.value) })),
+            { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 12 } },
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 } }, h('label', { style: { fontSize: 12, fontWeight: 650, color: 'var(--ftx-mut)' } }, t.cidLabel), h('input', { type: 'password', autoComplete: 'off', className: 'ftx-input', value: clientId, placeholder: status.clientIdSet ? t.savedPlaceholder : t.emptyCidPlaceholder, onChange: (e) => setClientId(e.target.value) })),
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 } }, h('label', { style: { fontSize: 12, fontWeight: 650, color: 'var(--ftx-mut)' } }, t.keyLabel), h('input', { type: 'password', autoComplete: 'off', className: 'ftx-input', value: apiKey, placeholder: status.apiKeySet ? t.savedPlaceholder : t.emptyKeyPlaceholder, onChange: (e) => setApiKey(e.target.value) })),
           ),
           h(
             'div',
@@ -1779,7 +1787,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: { display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', borderTop: '1px solid var(--ftx-line)', paddingTop: 12 } },
-            h('input', { type: 'text', className: 'ftx-input', style: { flex: 1, minWidth: 220 }, value: manualKbId, placeholder: t.kbManualPlaceholder, onChange: (e) => setManualKbId(e.target.value) }),
+            h('input', { type: 'text', className: 'ftx-input', style: { flex: '1 1 180px', minWidth: 0 }, value: manualKbId, placeholder: t.kbManualPlaceholder, onChange: (e) => setManualKbId(e.target.value) }),
             h('button', { type: 'button', className: 'ftx-btn-sm', style: { height: 34, padding: '0 14px' }, disabled: !manualKbId.trim(), onClick: () => onBindKb(manualKbId.trim(), '') }, t.kbSaveManual),
             status.defaultKbId && status.defaultKbSource !== 'env' && h('button', { type: 'button', className: 'ftx-btn-sm danger', style: { height: 34, padding: '0 14px' }, onClick: () => onBindKb('', '') }, t.kbClearDefault),
           ),
@@ -1833,29 +1841,33 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'ftx-root', style: { maxWidth: surface === 'sidebar' ? 1220 : 900, width: '100%', margin: surface === 'sidebar' ? '0 auto' : 0, padding: surface === 'sidebar' ? '18px 28px 22px' : '14px 16px 24px', display: 'flex', flexDirection: 'column', gap: 13, minHeight: surface === 'sidebar' ? '100%' : 'auto' } },
-        h(
-          'header',
-          { className: 'ftx-top' },
-          h('h1', { className: 'ftx-h1' }, t.title, h('span', null, `· ${t.subtitle}${status.version ? ` v${status.version}` : ''}`)),
-          h('div', { className: 'ftx-kb-pill' }, h(Icon, { kind: 'book', size: 15 }), h('span', { className: 'ftx-kb-dot', style: { background: status.configured ? 'var(--ftx-ok)' : 'var(--ftx-orange)' } }), h('span', null, credLabel)),
-        ),
+        { className: 'ftx-host-wrap' },
         h(
           'div',
-          { className: 'ftx-tabs' },
-          h('button', { type: 'button', className: `ftx-tab${tab === 'radar' ? ' is-active' : ''}`, onClick: () => setTab('radar') }, t.tabRadar),
-          h('button', { type: 'button', className: `ftx-tab${tab === 'calc' ? ' is-active' : ''}`, onClick: () => setTab('calc') }, t.tabCalc),
-          h('button', { type: 'button', className: `ftx-tab${tab === 'settings' ? ' is-active' : ''}`, onClick: () => setTab('settings') }, t.tabSettings),
-          h('span', { className: 'ftx-local-tag' }, h('i', null), t.localPill),
-        ),
-        h('div', { style: { display: tab === 'radar' ? 'block' : 'none' } }, h(StatementRadarTab, { t, status, refreshStatus, onCopyText, copiedKey, onJumpToCalc })),
-        h('div', { style: { display: tab === 'calc' ? 'block' : 'none' } }, h(CalculatorTab, { t, isZh, onCopyText, copiedKey, calcSeed })),
-        h('div', { style: { display: tab === 'settings' ? 'block' : 'none' } }, h(SettingsTab, { t, status, refreshStatus })),
-        h(
-          'footer',
-          { style: { marginTop: 'auto', paddingTop: 10, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, fontSize: 11, color: 'var(--ftx-mut)' } },
-          h('span', null, '本地离线初筛 · 结果供人工核查'),
-          h('span', { className: 'ftx-mono', style: { letterSpacing: '0.8px' } }, `DSH / FINTAX${status.version ? ` ${status.version}` : ''}`),
+          { className: 'ftx-root', style: { maxWidth: surface === 'sidebar' ? 'min(100%, 1220px)' : 'min(100%, 900px)', width: '100%', margin: surface === 'sidebar' ? '0 auto' : 0, padding: surface === 'sidebar' ? '16px 20px 22px' : '14px 16px 24px', display: 'flex', flexDirection: 'column', gap: 13, minHeight: surface === 'sidebar' ? '100%' : 'auto' } },
+          h(
+            'header',
+            { className: 'ftx-top' },
+            h('h1', { className: 'ftx-h1' }, t.title, h('span', null, `· ${t.subtitle}${status.version ? ` v${status.version}` : ''}`)),
+            h('div', { className: 'ftx-kb-pill', title: credLabel }, h(Icon, { kind: 'book', size: 15 }), h('span', { className: 'ftx-kb-dot', style: { background: status.configured ? 'var(--ftx-ok)' : 'var(--ftx-orange)' } }), h('span', { className: 'ftx-kb-pill-txt' }, credLabel)),
+          ),
+          h(
+            'div',
+            { className: 'ftx-tabs' },
+            h('button', { type: 'button', className: `ftx-tab${tab === 'radar' ? ' is-active' : ''}`, onClick: () => setTab('radar') }, t.tabRadar),
+            h('button', { type: 'button', className: `ftx-tab${tab === 'calc' ? ' is-active' : ''}`, onClick: () => setTab('calc') }, t.tabCalc),
+            h('button', { type: 'button', className: `ftx-tab${tab === 'settings' ? ' is-active' : ''}`, onClick: () => setTab('settings') }, t.tabSettings),
+            h('span', { className: 'ftx-local-tag' }, h('i', null), t.localPill),
+          ),
+          h('div', { style: { display: tab === 'radar' ? 'block' : 'none', minWidth: 0, maxWidth: '100%' } }, h(StatementRadarTab, { t, status, refreshStatus, onCopyText, copiedKey, onJumpToCalc })),
+          h('div', { style: { display: tab === 'calc' ? 'block' : 'none', minWidth: 0, maxWidth: '100%' } }, h(CalculatorTab, { t, isZh, onCopyText, copiedKey, calcSeed })),
+          h('div', { style: { display: tab === 'settings' ? 'block' : 'none', minWidth: 0, maxWidth: '100%' } }, h(SettingsTab, { t, status, refreshStatus })),
+          h(
+            'footer',
+            { style: { marginTop: 'auto', paddingTop: 10, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, fontSize: 11, color: 'var(--ftx-mut)' } },
+            h('span', null, '本地离线初筛 · 结果供人工核查'),
+            h('span', { className: 'ftx-mono', style: { letterSpacing: '0.8px' } }, `DSH / FINTAX${status.version ? ` ${status.version}` : ''}`),
+          ),
         ),
       )
     }
@@ -1871,7 +1883,7 @@ window.__ModuleLoader__.load({
           ctx.slots.inject('sidebar.panellist', () => {
             const offPanel = ctx.slots.register(
               { name: 'main', key: PANEL_ID, locale: NS },
-              () => h('div', { style: { height: '100%', width: '100%', overflow: 'auto' } }, h(FinTaxWorkbench, { lang: getLang(ctx), surface: 'sidebar' })),
+              () => h('div', { style: { height: '100%', width: '100%', maxWidth: '100%', minWidth: 0, flex: '1 1 0%', overflowY: 'auto', overflowX: 'hidden', boxSizing: 'border-box' } }, h(FinTaxWorkbench, { lang: getLang(ctx), surface: 'sidebar' })),
             )
             const offRow = ctx.slots.register(
               { name: 'sidebar.panellist', id: PANEL_ID, order: 22, label: () => t('nav'), locale: NS },

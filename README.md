@@ -1,4 +1,4 @@
-# dsh-fintax — 财税工作台 (v0.8.1)
+# dsh-fintax — 财税工作台 (v0.8.2)
 
 [![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
 [![CI](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml/badge.svg)](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml)
