@@ -242,8 +242,9 @@ export function createFintaxApiHandler({ getConnection }) {
             })
           : null
 
-        const reportHtml = renderDiagnosticReportHtml({ summaries, consolidated, version: PKG_VERSION })
-        const reportMd = renderDiagnosticReportMd({ summaries, consolidated, version: PKG_VERSION })
+        const includeResourceAppendix = Boolean(body?.includeResourceAppendix)
+        const reportHtml = renderDiagnosticReportHtml({ summaries, consolidated, version: PKG_VERSION, includeResourceAppendix })
+        const reportMd = renderDiagnosticReportMd({ summaries, consolidated, version: PKG_VERSION, includeResourceAppendix })
         const anomaliesCsv = renderAnomaliesCsv({ summaries })
 
         return send(200, {
@@ -259,13 +260,15 @@ export function createFintaxApiHandler({ getConnection }) {
       }
 
       if (subPath === '/history' && method === 'GET') {
+        const entityName = (url.searchParams.get('entity') ?? '').trim()
         const history = loadHistory()
-        return send(200, { ok: true, history, rolling12m: computeRolling12m(history) })
+        return send(200, { ok: true, history, rolling12m: computeRolling12m(history, { entityName }) })
       }
 
       if (subPath === '/history/report' && method === 'GET') {
+        const entityName = (url.searchParams.get('entity') ?? '').trim()
         const history = loadHistory()
-        const rolling12m = computeRolling12m(history)
+        const rolling12m = computeRolling12m(history, { entityName })
         const reportHtml = renderRollingTrendReportHtml({ history, rolling12m, version: PKG_VERSION })
         return send(200, { ok: true, version: PKG_VERSION, reportHtml })
       }
@@ -274,7 +277,16 @@ export function createFintaxApiHandler({ getConnection }) {
         const body = await readJsonBody(req, 65_536)
         try {
           const saved = saveSnapshot(body || {})
-          return send(200, { ok: true, ...saved })
+          if (saved.conflict) {
+            return send(409, {
+              ok: false,
+              error: `检测到同主体同店铺同账期归档重叠（${saved.existing?.entityName || '待认领'} · ${saved.existing?.storeScope || '-'} · ${saved.existing?.month || ''}），请选择覆盖替换原档或作为补充另存`,
+              ...saved,
+            })
+          }
+          const filterEntity = typeof body?.filterEntity === 'string' ? body.filterEntity.trim() : ''
+          const rolling12m = filterEntity ? computeRolling12m(saved.history, { entityName: filterEntity }) : saved.rolling12m
+          return send(200, { ok: true, ...saved, rolling12m })
         } catch (histErr) {
           return send(400, { error: histErr?.message || '保存体检快照失败' })
         }
@@ -284,9 +296,11 @@ export function createFintaxApiHandler({ getConnection }) {
         const id = subPath.startsWith('/history/')
           ? decodeURIComponent(subPath.slice('/history/'.length))
           : (url.searchParams.get('id') ?? '')
+        const entityName = (url.searchParams.get('entity') ?? '').trim()
         try {
           const resDel = deleteSnapshot(id)
-          return send(200, { ok: true, ...resDel })
+          const rolling12m = entityName ? computeRolling12m(resDel.history, { entityName }) : resDel.rolling12m
+          return send(200, { ok: true, ...resDel, rolling12m })
         } catch (delErr) {
           return send(400, { error: delErr?.message || '删除快照失败' })
         }
@@ -672,9 +686,9 @@ export function apply(ctx) {
                 `── 一、结汇通道资金流向拆解（单位：${ccy}，精确到 0.01）──`,
                 `· ① 电商平台/收单网关回款入账：${fmtAmount(s.walletMetrics.platformInbound)}`,
                 `· ② 非标准平台/其他入账（请核实来源防漏报）：${fmtAmount(s.walletMetrics.otherInbound)}`,
-                `· ③ 结汇提现至境内对公账户（合规回流）：${fmtAmount(s.walletMetrics.fxWithdrawToCorporate)}`,
-                `· ④ 提现至个人私户/法人私卡（公私混收 P0 阻断）：${fmtAmount(s.walletMetrics.fxWithdrawToPersonal)}`,
-                `· ⑤ 收款户性质待核提现（未计入已确认对公回流，P1）：${fmtAmount(s.walletMetrics.unverifiedWithdraw || 0n)}`,
+                `· ③ 结汇提现至企业账户（待核银行回单）：${fmtAmount(s.walletMetrics.fxWithdrawToCorporate)}`,
+                `· ④ 提现至个人私户/法人私卡（P0 优先核查）：${fmtAmount(s.walletMetrics.fxWithdrawToPersonal)}`,
+                `· ⑤ 收款户性质待核提现（未计入企业户转出占比，P1）：${fmtAmount(s.walletMetrics.unverifiedWithdraw || 0n)}`,
                 `· ⑥ 钱包余额境外坐支（供应商/物流/广告/卡消费，P1 高危）：${fmtAmount(s.walletMetrics.directSpend)}`,
                 `· ⑦ 提现/汇兑/账户手续费：${fmtAmount(s.walletMetrics.walletFees)}`,
                 `· ⑧ 已自动剥离同户换汇/多币种互转：${fmtAmount(s.walletMetrics.internalFxStripped)}（${s.walletMetrics.internalFxCount} 笔，本币净变动 ${fmtAmount(s.walletMetrics.internalFxNet || 0n)}）`,
@@ -754,7 +768,7 @@ export function apply(ctx) {
               `【多表/多币种合并人民币总对账 & 年终红线核验（共合并 ${summaries.length} 张结算单）】`,
               ...consolidated.breakdown.map((b) =>
                 b.role === 'settlement_wallet'
-                  ? `· 结汇通道 [${b.label}]：平台入账折合 ¥${(b.walletInboundCny || 0).toFixed(2)} ｜ 对公回流折合 ¥${(b.corporateWithdrawCny || 0).toFixed(2)}（汇率 ${b.fx}，不重复计入销售报送额）`
+                  ? `· 结汇通道 [${b.label}]：平台入账折合 ¥${(b.walletInboundCny || 0).toFixed(2)} ｜ 转出企业户(待核回单)折合 ¥${(b.corporateWithdrawCny || 0).toFixed(2)}（汇率 ${b.fx}，不重复计入销售报送额）`
                   : `· 分表折算 [${b.label}]：原币报送毛额 ${b.grossOrig} ${b.currency} × 汇率 ${b.fx} = ${b.grossCny.toFixed(2)} 元`,
               ),
               ...consolidated.reconcile.steps.map((st) => `· ${st}`),
@@ -769,9 +783,10 @@ export function apply(ctx) {
               const gapTxt = fc.hasSalesEvidence ? `¥${fc.stage1to2GapCny.toFixed(2)}` : '待核对'
               const rateTxt = fc.corporateRepatriationRatePct !== null ? `${fc.corporateRepatriationRatePct}%` : '待核'
               cLines.push(
-                `── 三段资金链路交叉核对（平台放款 → 结汇通道 → 境内对公收汇）──`,
-                `· ① 销售平台实际放款：${s1Txt} ｜ ② 结汇通道平台入账：¥${fc.stage2WalletInboundCny.toFixed(2)}${fc.stage2OtherInboundCny > 0 ? `（+其他入账 ¥${fc.stage2OtherInboundCny.toFixed(2)}）` : ''} ｜ 一/二段差异：${gapTxt}`,
-                `· ③ 境内对公回流：¥${fc.stage3CorporateRepatriatedCny.toFixed(2)}（回流率 ${rateTxt}）｜ 私户提现(P0)：¥${fc.stage3PersonalWithdrawCny.toFixed(2)} ｜ 待核提现(P1)：¥${(fc.stage3UnverifiedWithdrawCny || 0).toFixed(2)} ｜ 境外坐支(P1)：¥${fc.directSpendCny.toFixed(2)} ｜ 滞留境外：¥${fc.retainedOffshoreCny.toFixed(2)}`,
+                `── 三段资金链路交叉核对（平台放款 → 结汇通道 → 钱包转出至企业户[待核银行回单]）──`,
+                `· ① 销售平台实际放款：${s1Txt} ｜ ② 结汇通道平台入账：¥${fc.stage2WalletInboundCny.toFixed(2)}${fc.stage2OtherInboundCny > 0 ? `（+其他入账 ¥${fc.stage2OtherInboundCny.toFixed(2)}）` : ''} ｜ 一/二段差额：${gapTxt}`,
+                `· ③ 钱包转出至企业户(待核银行回单)：¥${fc.stage3CorporateRepatriatedCny.toFixed(2)}（企业户转出占比 ${rateTxt}）｜ 私户提现(P0)：¥${fc.stage3PersonalWithdrawCny.toFixed(2)} ｜ 待核提现(P1)：¥${(fc.stage3UnverifiedWithdrawCny || 0).toFixed(2)} ｜ 境外坐支(P1)：¥${fc.directSpendCny.toFixed(2)} ｜ 滞留境外：¥${fc.retainedOffshoreCny.toFixed(2)}`,
+                ...(fc.stage3StatusNote ? [`· 口径提示：${fc.stage3StatusNote}`] : []),
                 ...fc.alerts.map((a) => `· ${a}`),
               )
             }

@@ -2,6 +2,24 @@
 
 All notable changes to `dsh-fintax` will be documented in this file.
 
+## [0.8.1] - 2026-11-20
+
+### Fixed & Improved (Real-World Monthly Close Hardening)
+- **Honest Stage-3 Verification Boundary (`lib/platforms_v8.js`, `lib/report.js`, `index.js`, `client.js`)**:
+  - Replaced premature "境内对公合规回流" wording with **"钱包转出至企业户（待核银行回单）"** (`stage3VerificationStatus: 'pending_bank_receipt'`), explicitly noting that wallet beneficiary fields alone cannot prove domestic entity ownership or bank settlement until verified against bank receipts. Clarified P0/P1 as review priority levels.
+- **Anti-Collision & Anti-Cross-Entity Archive Identity (`lib/history.js`, `index.js`, `client.js`)**:
+  - Upgraded local archive schema to `dsh-fintax-history-v2` (atomic write, backward-compatible migration marking legacy records as `待认领` / `unclaimed`).
+  - Decoupled editable display `label` from archive identity: snapshots are keyed strictly by **`entityName + storeScope + month`**, preventing accidental double-counting on rename or cross-store overwrites.
+  - Added separate VAT taxpayer type (`small_scale | general | unknown`), CIT 4% assessment status (`assessed_4pct | audit_actual | unknown`), explicit `zeroSalesConfirmed` support (distinguishing missing months vs confirmed zero-sales months), entity-scoped filtering (`GET /history?entity=`, `GET /history/report?entity=`), and HTTP **`409` conflict confirmation flow** (`replace` / `append` / `cancel`).
+- **Actionable Reconciliation Sheet & First-Screen Simplification (`lib/report.js`, `client.js`)**:
+  - Simplified empty-state workbench first screen to two clear entry CTAs: **"用示例看一张核对单"** (`demo:v8`) and **"核对我的账单"** (drop/pick CSV/XLSX/ZIP, zero IMA setup required).
+  - Upgraded HTML & Markdown exports to **"跨境月结核对单"** featuring Section 1 **"本期核对范围与老板一页结论"** (explicit file coverage even at 0 anomalies) and **"财务待核派活清单"** (mapped `下一步待补凭证` next-step proof guidance per anomaly, also exported in CSV).
+  - External exported reports are **zero-promo by default** (`includeResourceAppendix = false`); users may optionally check `导出时附带参考指引附页`.
+  - Refined dual gauges to **"本纳税年度情景估算（4% 核定假设）"** and **"滚动登记参考（连续 12 月 / 4 季 · 500 万）"** displaying covered, missing, and confirmed zero-sales months separately.
+- **50,000-Row Engineering Benchmark & Unknown-Header Diagnostics (`lib/statement.js`, `test/v08.test.js`)**:
+  - Unknown-format errors now return sanitized detected column headers (up to 15 header cells, zero transaction row data leaked).
+  - Added 50,000-row Amazon statement end-to-end benchmark (parse → reconcile → HTML/CSV export, verified ~314 ms with exact BigInt totals and full CSV anomaly rows).
+
 ## [0.8.0] - 2026-11-20
 
 ### Added

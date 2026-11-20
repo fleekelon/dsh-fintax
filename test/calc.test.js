@@ -1077,7 +1077,7 @@ test('v0.5.0 回归：.zip 压缩包免解压直拖 + 多币种 fx_rates 合并�
     assert.ok(out.includes('4% 核定收入等值初筛'))
 
     const htmlText = readFileSync(htmlPath, 'utf8')
-    assert.ok(htmlText.includes('跨境店铺原始结算账单 · 税务初筛体检诊断书'))
+    assert.ok(htmlText.includes('跨境月结核对单'))
     assert.ok(htmlText.includes('4% 核定收入等值初筛'))
     assert.ok(!htmlText.includes('借：应收账款')) // 严守护城河，不泄露正式会计分录
 
@@ -1089,7 +1089,7 @@ test('v0.5.0 回归：.zip 压缩包免解压直拖 + 多币种 fx_rates 合并�
     })
     assert.match(demoOut, /放款差额（实际放款 − 理论放款）=.*= 0 元/)
     const mdText = readFileSync(mdPath, 'utf8')
-    assert.ok(mdText.includes('# 跨境店铺原始结算单税务初筛体检诊断书'))
+    assert.ok(mdText.includes('# 跨境月结核对单'))
     assert.ok(mdText.includes('Temu 全托管供货与半托管自营混同'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -1205,8 +1205,8 @@ test('v0.6.0 回归：工作台后端 /api/fintax/parse 与 /api/fintax/calc 全
   assert.equal(rDemo.json.ok, true)
   assert.equal(rDemo.json.summaries.length, 3)
   assert.equal(rDemo.json.consolidated.ready, true)
-  assert.ok(rDemo.json.reportHtml.includes('跨境店铺原始结算账单 · 税务初筛体检诊断书'))
-  assert.ok(rDemo.json.reportMd.includes('# 跨境店铺原始结算单税务初筛体检诊断书'))
+  assert.ok(rDemo.json.reportHtml.includes('跨境月结核对单'))
+  assert.ok(rDemo.json.reportMd.includes('# 跨境月结核对单'))
 
   // 3. /api/fintax/parse Base64 真实账单文件内存直解析
   const temuCsv = [

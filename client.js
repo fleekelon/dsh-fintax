@@ -24,8 +24,8 @@ window.__ModuleLoader__.load({
         payoutDiffHelp: '正值表示实放较多，负值表示实放较少。',
         salesGap: '申报比对差额（调整后参考额 − 已申报额）',
         salesGapHelp: '正值表示参考额较高，负值表示已申报额较高。',
-        assessedGauge: '7,500 万核定收入等值',
-        assessedGaugeHelp: '4% 假设 · 报送参考净额初筛',
+        assessedGauge: '本纳税年度情景估算',
+        assessedGaugeHelp: '4% 核定假设 · 按主体年度核验',
         unverified: '待核实',
         nav: '财税工作台',
         title: '财税工作台',
@@ -42,17 +42,17 @@ window.__ModuleLoader__.load({
         defaultKbNone: '未绑定默认库',
         dropTitle: '拖入原始结算账单 / .ZIP',
         dropSub: '支持 8 大销售平台 + 3 大结汇通道（万里汇 / 派安盈 / 空中云汇）· 原始明细 100% 留在本机内存',
-        pickFiles: '拖入账单 / .ZIP',
+        pickFiles: '核对我的账单 / .ZIP',
         runDemo: '经典三平台沙盒',
         runDemoV7: 'v0.7 新三平台沙盒',
-        runDemoV8: 'v0.8 全链路结汇沙盒',
+        runDemoV8: '用示例看一张核对单',
         parsing: '解析中…',
         recalcBtn: '按汇率重算总对账',
         saveFxDefault: '保存为默认汇率',
         resetFxDefault: '恢复内置参考汇率',
-        exportHtml: '导出老板 HTML 体检单',
+        exportHtml: '导出老板版 HTML 核对单',
         exportMd: '导出 Markdown (.md)',
-        exportCsv: '导出异常排雷 CSV',
+        exportCsv: '导出财务待核 CSV',
         exportTrendHtml: '导出滚年趋势月报',
         declaredLabel: '已申报增值税/出口销售额（元）',
         platformAuto: '自动识别（11 通道）',
@@ -614,7 +614,12 @@ window.__ModuleLoader__.load({
         const txt = await res.text()
         let json = {}
         try { json = txt ? JSON.parse(txt) : {} } catch { json = { error: txt.slice(0, 200) } }
-        if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`)
+        if (!res.ok) {
+          const apiErr = new Error(json?.error || `HTTP ${res.status}`)
+          apiErr.status = res.status
+          apiErr.data = json
+          throw apiErr
+        }
         return json
       } finally {
         clearTimeout(timer)
@@ -674,9 +679,17 @@ window.__ModuleLoader__.load({
       const [showFxBar, setShowFxBar] = useState(false)
       const [showHistList, setShowHistList] = useState(false)
       const [histState, setHistState] = useState({ history: [], rolling12m: null })
+      const [activeEntityFilter, setActiveEntityFilter] = useState('')
+      const [snapEntity, setSnapEntity] = useState('')
+      const [snapStore, setSnapStore] = useState('')
+      const [snapVatType, setSnapVatType] = useState('unknown')
+      const [snapCitMode, setSnapCitMode] = useState('unknown')
+      const [snapZeroSales, setSnapZeroSales] = useState(false)
+      const [snapConflict, setSnapConflict] = useState(null)
       const [snapLabel, setSnapLabel] = useState('')
       const [snapMonth, setSnapMonth] = useState('')
       const [snapMsg, setSnapMsg] = useState('')
+      const [includeAppendix, setIncludeAppendix] = useState(false)
 
       // 载入本机持久化的自定义汇率预设（仅在用户尚未手动修改草稿时同步，防止晚到响应覆盖编辑）
       useEffect(() => {
@@ -691,19 +704,22 @@ window.__ModuleLoader__.load({
         }
       }, [status?.customFxRates])
 
-      const refreshHistory = useCallback(async () => {
+      const refreshHistory = useCallback(async (entityOverride) => {
         try {
-          const res = await callApi('/history')
+          const ent = entityOverride !== undefined ? entityOverride : activeEntityFilter
+          const qs = ent ? `?entity=${encodeURIComponent(ent)}` : ''
+          const res = await callApi(`/history${qs}`)
           setHistState({ history: res.history || [], rolling12m: res.rolling12m || null })
         } catch { /* ignore */ }
-      }, [])
+      }, [activeEntityFilter])
 
       useEffect(() => { refreshHistory() }, [refreshHistory])
 
-      const runParse = useCallback(async ({ files, demo, fxOverrides, declaredOverride, platOverride }) => {
+      const runParse = useCallback(async ({ files, demo, fxOverrides, declaredOverride, platOverride, appendixOverride }) => {
         setBusy(true)
         setErr('')
         setSnapMsg('')
+        setSnapConflict(null)
         try {
           const useFx = fxOverrides || fxMap
           // 先注入内置参考汇率兜底，再用用户配置覆盖，避免首次解析新币种因缺汇率需点两次按钮
@@ -714,7 +730,12 @@ window.__ModuleLoader__.load({
           }
           const declRaw = declaredOverride !== undefined ? declaredOverride : declaredCny
           const declNum = declRaw !== '' && Number.isFinite(Number(declRaw)) ? Number(declRaw) : undefined
-          const payload = { platform: platOverride || platform, fxRates: numericFx, declaredVatSalesCny: declNum }
+          const payload = {
+            platform: platOverride || platform,
+            fxRates: numericFx,
+            declaredVatSalesCny: declNum,
+            includeResourceAppendix: appendixOverride !== undefined ? appendixOverride : includeAppendix,
+          }
           if (demo) payload.demo = demo
           else payload.files = files
 
@@ -726,7 +747,10 @@ window.__ModuleLoader__.load({
           const firstPeriod = (res.summaries || []).find((s) => /^\d{4}-\d{2}/.test(s.period))?.period?.slice(0, 7) || new Date().toISOString().slice(0, 7)
           setSnapMonth(firstPeriod)
           const plats = [...new Set((res.summaries || []).map((s) => s.platform))]
-          setSnapLabel(`${firstPeriod} ${plats.join('+')} 体检`)
+          const salesPlats = [...new Set((res.summaries || []).filter((s) => s.role !== 'settlement_wallet').map((s) => s.platform))]
+          setSnapStore((salesPlats.length ? salesPlats : plats).join('+'))
+          setSnapLabel(`${firstPeriod} ${plats.join('+')} 月结核对`)
+          setSnapZeroSales(false)
           const nextFx = { ...useFx }
           for (const s of res.summaries || []) {
             if (s.currency && s.currency !== 'RMB' && s.currency !== 'CNY' && s.currency !== 'UNKNOWN' && !nextFx[s.currency]) {
@@ -739,7 +763,7 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
-      }, [fxMap, declaredCny, platform])
+      }, [fxMap, declaredCny, platform, includeAppendix])
 
       const handleSaveFxRates = async () => {
         setFxSaveMsg('')
@@ -776,7 +800,8 @@ window.__ModuleLoader__.load({
 
       const handleExportTrendReport = async () => {
         try {
-          const res = await callApi('/history/report')
+          const qs = activeEntityFilter ? `?entity=${encodeURIComponent(activeEntityFilter)}` : ''
+          const res = await callApi(`/history/report${qs}`)
           if (res?.reportHtml) {
             downloadText(res.reportHtml, '跨境财税12个月滚动风控趋势月报.html', 'text/html;charset=utf-8')
           }
@@ -810,7 +835,7 @@ window.__ModuleLoader__.load({
         await runParse({ files: [], demo: modeKey, declaredOverride: presetDeclared })
       }
 
-      const handleSaveSnapshot = async () => {
+      const handleSaveSnapshot = async (conflictMode = 'check') => {
         if (!data?.consolidated?.ready) return
         setSnapMsg('')
         try {
@@ -819,24 +844,46 @@ window.__ModuleLoader__.load({
           const res = await callApi('/history', {
             method: 'POST',
             body: JSON.stringify({
-              month: snapMonth, label: snapLabel, platforms: plats,
-              sheetCount: data.summaries.length, rowCount: totalRows,
-              grossCny: tv.grossCny, refundCny: tv.refundCny, netSalesCny: tv.netSalesCny,
-              feesCny: tv.feesCny, payoutCny: tv.payoutCny,
+              month: snapMonth,
+              entityName: snapEntity.trim() || '待认领',
+              storeScope: snapStore.trim() || plats.join('+'),
+              vatTaxpayerType: snapVatType,
+              citAssessedMode: snapCitMode,
+              zeroSalesConfirmed: snapZeroSales,
+              conflictMode,
+              filterEntity: activeEntityFilter,
+              label: snapLabel,
+              platforms: plats,
+              sheetCount: data.summaries.length,
+              rowCount: totalRows,
+              grossCny: tv.grossCny,
+              refundCny: tv.refundCny,
+              netSalesCny: tv.netSalesCny,
+              feesCny: tv.feesCny,
+              payoutCny: tv.payoutCny,
               declaredVatSalesCny: declaredCny || null,
-              p0Count: p0.length, p1Count: p1.length, p2Count: p2.length,
+              p0Count: p0.length,
+              p1Count: p1.length,
+              p2Count: p2.length,
             }),
           })
+          setSnapConflict(null)
           setHistState({ history: res.history || [], rolling12m: res.rolling12m || null })
-          setSnapMsg('已归档 ✓')
+          setSnapMsg(res.deduplicated ? '已覆盖更新原档 ✓' : conflictMode === 'append' ? '已作为补充另存 ✓' : '已归档 ✓')
         } catch (e) {
-          setSnapMsg(`失败：${e.message}`)
+          if (e.status === 409 && e.data?.conflict) {
+            setSnapConflict({ existing: e.data.existing, sourceKey: e.data.sourceKey, message: e.message })
+            setSnapMsg('')
+          } else {
+            setSnapMsg(`失败：${e.message}`)
+          }
         }
       }
 
       const handleDeleteSnapshot = async (id) => {
         try {
-          const res = await callApi(`/history/${encodeURIComponent(id)}`, { method: 'DELETE' })
+          const qs = activeEntityFilter ? `?entity=${encodeURIComponent(activeEntityFilter)}` : ''
+          const res = await callApi(`/history/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' })
           setHistState({ history: res.history || [], rolling12m: res.rolling12m || null })
         } catch (e) { setErr(e.message) }
       }
@@ -861,13 +908,21 @@ window.__ModuleLoader__.load({
       const activeCcys = sheetCcys.length > 0 ? sheetCcys : Object.keys(fxMap)
 
       const r12 = histState?.rolling12m
-      const hasHistory = Boolean(r12?.snapshotCount)
+      const hasHistory = Boolean(r12?.snapshotCount || (histState?.history || []).length)
       const consTotals = data?.consolidated?.ready ? data.consolidated.totals : null
       const fundChain = data?.consolidated?.fundChain || null
       const isWalletOnly = Boolean(fundChain && !fundChain.hasSalesEvidence)
-      const gaugeNetCny = hasHistory ? r12.totalNetSalesCny : (consTotals?.netSalesCny || 0)
-      const pct75 = hasHistory ? r12.cliff75mPct : (consTotals ? Math.round((consTotals.netSalesCny / 75_000_000) * 10000) / 100 : 0)
-      const pct5 = hasHistory ? r12.threshold5mPct : (consTotals ? Math.round((consTotals.netSalesCny / 5_000_000) * 10000) / 100 : 0)
+      const gaugeNetCny = r12?.snapshotCount ? r12.totalNetSalesCny : (consTotals?.netSalesCny || 0)
+      const pct75 = r12?.snapshotCount
+        ? (r12.taxYearCliff75mPct !== undefined ? r12.taxYearCliff75mPct : r12.cliff75mPct)
+        : (consTotals ? Math.round((consTotals.netSalesCny / 75_000_000) * 10000) / 100 : 0)
+      const pct5 = r12?.snapshotCount ? r12.threshold5mPct : (consTotals ? Math.round((consTotals.netSalesCny / 5_000_000) * 10000) / 100 : 0)
+      const gaugeAFoot = r12?.snapshotCount && r12.taxYear
+        ? `${r12.taxYear} 年 ${r12.taxYearMonthCount || r12.monthCount} 月 · 4% 情景估算`
+        : t.assessedGaugeHelp
+      const gaugeBFoot = r12?.snapshotCount
+        ? `覆盖 ${r12.monthCount}/12 月 · 缺档 ${r12.missingMonthsCount ?? Math.max(0, 12 - r12.monthCount)} 月${r12.zeroSalesMonthsCount > 0 ? ` · 零收入 ${r12.zeroSalesMonthsCount} 月` : ''}`
+        : '连续 12 月/4 季 · 须按应税额复核'
       const declDiag = data?.consolidated?.ready && !isWalletOnly ? data.consolidated.reconcile?.declarationDiagnosis : null
 
       const jumpBridge = () => {
@@ -933,7 +988,7 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'ftx-metrics' },
               isWalletOnly
-                ? h('div', null, h('label', null, '已确认对公结汇'), h('b', null, `¥${Math.round(fundChain.stage3CorporateRepatriatedCny || 0).toLocaleString()}`))
+                ? h('div', null, h('label', null, '转出企业户(待核回单)'), h('b', null, `¥${Math.round(fundChain.stage3CorporateRepatriatedCny || 0).toLocaleString()}`))
                 : h('div', null, h('label', null, '合并净销售额'), h('b', null, `¥${consTotals ? Math.round(consTotals.netSalesCny).toLocaleString() : '0'}`)),
               isWalletOnly
                 ? h('div', null, h('label', null, '结汇通道手续费'), h('b', null, `¥${Math.round(fundChain.walletFeesCny || 0).toLocaleString()}`))
@@ -962,29 +1017,88 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'ftx-inst-head' },
-              h('span', null, hasHistory ? `12 个月滚年监控（${r12.snapshotCount} 份归档快照）` : '12 个月滚年监控'),
-              h('span', { style: { fontSize: 11.5, color: 'var(--ftx-mut)', fontWeight: 400 } }, hasHistory ? '滚动报送参考净额 ' : '当期报送参考净额 ', h('b', { className: 'ftx-mono', style: { fontSize: 16, color: 'var(--ftx-ink)' } }, `¥${Math.round(gaugeNetCny).toLocaleString()}`)),
+              h(
+                'div',
+                { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+                h('span', null, r12?.snapshotCount ? `滚动监控（${r12.snapshotCount} 份归档）` : '12 个月滚动监控'),
+                Array.isArray(r12?.entities) && r12.entities.length > 0 &&
+                  h(
+                    'select',
+                    {
+                      value: activeEntityFilter,
+                      onChange: (e) => { const v = e.target.value; setActiveEntityFilter(v); refreshHistory(v) },
+                      className: 'ftx-input',
+                      style: { padding: '2px 6px', fontSize: 11 },
+                      title: '按公司主体筛选滚动口径，防止多主体串账',
+                    },
+                    h('option', { value: '' }, `全部主体 (${histState.history.length})`),
+                    ...r12.entities.map((ent) => h('option', { key: ent.name, value: ent.name }, `${ent.name}${ent.unclaimed ? ' [旧档]' : ''} (${ent.count})`)),
+                  ),
+              ),
+              h('span', { style: { fontSize: 11.5, color: 'var(--ftx-mut)', fontWeight: 400 } }, r12?.snapshotCount ? '滚动净额 ' : '当期净额 ', h('b', { className: 'ftx-mono', style: { fontSize: 16, color: 'var(--ftx-ink)' } }, `¥${Math.round(gaugeNetCny).toLocaleString()}`)),
             ),
             h(
               'div',
               { className: 'ftx-meters' },
-              h(DialGauge, { code: 'A', title: t.assessedGauge, pct: pct75, warnPct: 73.3, footNote: t.assessedGaugeHelp }),
-              h(DialGauge, { code: 'B', title: '500 万登记参考', pct: pct5, warnPct: 80, footNote: '须按应税销售额复核' }),
+              h(DialGauge, { code: 'A', title: t.assessedGauge, pct: pct75, warnPct: 73.3, footNote: gaugeAFoot }),
+              h(DialGauge, { code: 'B', title: '滚动登记参考 · 500万', pct: pct5, warnPct: 80, footNote: gaugeBFoot }),
             ),
-            // 紧凑归档条（有数据时可直接归档；有历史时可展开查看并删除）
+            // 防串账归档身份条（主体 + 店铺 + 账期决定唯一归档身份，显示备注可随意修改）
             h(
               'div',
-              { style: { display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginTop: 10 } },
-              data && consTotals && (consTotals.grossCny > 0 || consTotals.netSalesCny > 0) && h('input', { type: 'month', value: snapMonth, onChange: (e) => setSnapMonth(e.target.value), className: 'ftx-input', style: { padding: '3px 6px', fontSize: 11.5 } }),
-              data && consTotals && (consTotals.grossCny > 0 || consTotals.netSalesCny > 0) && h('input', { type: 'text', value: snapLabel, onChange: (e) => setSnapLabel(e.target.value), placeholder: '快照备注', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 110px', minWidth: 95 } }),
-              data && consTotals && (consTotals.grossCny > 0 || consTotals.netSalesCny > 0) && h('button', { type: 'button', className: 'ftx-btn-sm', onClick: handleSaveSnapshot }, '归档至12个月滚年监控'),
-              snapMsg && h('span', { style: { fontSize: 11.5, fontWeight: 700, color: snapMsg.includes('失败') ? 'var(--ftx-orange)' : 'var(--ftx-ok)' } }, snapMsg),
-              hasHistory &&
+              { style: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 } },
+              data && consTotals &&
                 h(
-                  'button',
-                  { type: 'button', className: 'ftx-btn-sm', style: { marginLeft: 'auto' }, onClick: () => setShowHistList(!showHistList) },
-                  showHistList ? '收起归档明细 ▲' : `管理 ${histState.history.length} 份归档 ▼`,
+                  'div',
+                  { style: { display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' } },
+                  h('input', { type: 'month', value: snapMonth, onChange: (e) => setSnapMonth(e.target.value), className: 'ftx-input', style: { padding: '3px 6px', fontSize: 11.5 } }),
+                  h('input', { type: 'text', value: snapEntity, onChange: (e) => setSnapEntity(e.target.value), placeholder: '公司主体(防串账)', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 115px', minWidth: 96 } }),
+                  h('input', { type: 'text', value: snapStore, onChange: (e) => setSnapStore(e.target.value), placeholder: '店铺/范围', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 92px', minWidth: 82 } }),
+                  h('button', { type: 'button', className: 'ftx-btn-sm on', onClick: () => handleSaveSnapshot('check') }, '归档'),
                 ),
+              data && consTotals &&
+                h(
+                  'div',
+                  { style: { display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', fontSize: 11 } },
+                  h('input', { type: 'text', value: snapLabel, onChange: (e) => setSnapLabel(e.target.value), placeholder: '显示备注(改名不改归档身份)', className: 'ftx-input', style: { padding: '2px 6px', fontSize: 11, flex: '1 1 110px', minWidth: 90 } }),
+                  h(
+                    'select',
+                    { value: snapVatType, onChange: (e) => setSnapVatType(e.target.value), className: 'ftx-input', style: { padding: '2px 5px', fontSize: 11 }, title: '增值税纳税人身份' },
+                    h('option', { value: 'unknown' }, '增值税:未设'),
+                    h('option', { value: 'small_scale' }, '小规模'),
+                    h('option', { value: 'general' }, '一般纳税人'),
+                  ),
+                  h(
+                    'select',
+                    { value: snapCitMode, onChange: (e) => setSnapCitMode(e.target.value), className: 'ftx-input', style: { padding: '2px 5px', fontSize: 11 }, title: '企业所得税核定状态' },
+                    h('option', { value: 'unknown' }, '所得税:未设'),
+                    h('option', { value: 'assessed_4pct' }, '4%核定'),
+                    h('option', { value: 'audit_actual' }, '查账征收'),
+                  ),
+                  (consTotals.grossCny <= 0 && consTotals.netSalesCny <= 0) &&
+                    h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--ftx-mut)', cursor: 'pointer' } }, h('input', { type: 'checkbox', checked: snapZeroSales, onChange: (e) => setSnapZeroSales(e.target.checked) }), '确认零收入'),
+                ),
+              snapConflict &&
+                h(
+                  'div',
+                  { className: 'ftx-gap', style: { padding: '7px 10px', fontSize: 11.5, gap: 6 } },
+                  h('i', { className: 'att' }, '!'),
+                  h('span', { style: { flex: '1 1 180px' } }, `已存在同主体同店铺同账期归档（${snapConflict.existing?.entityName} · ${snapConflict.existing?.storeScope} · ${snapConflict.existing?.month}，原净额 ¥${Number(snapConflict.existing?.netSalesCny || 0).toLocaleString()}），请确认：`),
+                  h('button', { type: 'button', className: 'ftx-btn-sm on', onClick: () => handleSaveSnapshot('replace') }, '覆盖替换原档'),
+                  h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleSaveSnapshot('append') }, '作为补充另存'),
+                  h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => setSnapConflict(null) }, '取消'),
+                ),
+              h(
+                'div',
+                { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+                snapMsg && h('span', { style: { fontSize: 11.5, fontWeight: 700, color: snapMsg.includes('失败') ? 'var(--ftx-orange)' : 'var(--ftx-ok)' } }, snapMsg),
+                hasHistory &&
+                  h(
+                    'button',
+                    { type: 'button', className: 'ftx-btn-sm', style: { marginLeft: 'auto' }, onClick: () => setShowHistList(!showHistList) },
+                    showHistList ? '收起归档明细 ▲' : `管理 ${histState.history.length} 份归档 ▼`,
+                  ),
+              ),
             ),
           ),
         ),
@@ -1028,16 +1142,26 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => onJumpToCalc('cbec_assessed_cit', {}, false) }, '按主体试算 4% 核定'),
               ),
             ),
-            ...histState.history.slice(0, 12).map((it) =>
-              h(
+            ...histState.history.slice(0, 12).map((it) => {
+              const ent = it.entityName || '待认领'
+              return h(
                 'div',
                 { key: it.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 12, padding: '5px 8px', borderBottom: '1px solid var(--ftx-line)' } },
-                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' } }, h('span', { className: 'ftx-sev' }, it.month.slice(2)), h('strong', null, it.label), h('span', { style: { color: 'var(--ftx-mut)' } }, (it.platforms || []).join('/')), h('b', { className: 'ftx-mono' }, `¥${Number(it.netSalesCny || 0).toLocaleString()}`)),
+                h(
+                  'div',
+                  { style: { display: 'flex', flexWrap: 'wrap', gap: 7, alignItems: 'center' } },
+                  h('span', { className: 'ftx-sev' }, it.month.slice(2)),
+                  h('span', { className: `ftx-sev ${ent === '待认领' ? 'p1' : ''}`, style: { width: 'auto', padding: '0 6px' } }, ent),
+                  h('strong', null, it.storeScope || it.label),
+                  it.label && it.label !== it.storeScope && h('span', { style: { color: 'var(--ftx-mut)' } }, it.label),
+                  it.zeroSalesConfirmed && h('span', { style: { fontSize: 10.5, color: 'var(--ftx-mut)' } }, '[零收入]'),
+                  h('b', { className: 'ftx-mono' }, `¥${Number(it.netSalesCny || 0).toLocaleString()}`),
+                ),
                 h('button', { type: 'button', className: 'ftx-btn-sm danger', onClick: () => handleDeleteSnapshot(it.id) }, '删除'),
-              ),
-            ),
+              )
+            }),
           ),
-        // ── v0.8 三段资金链路交叉核对仪表卡（仅当存在结汇通道流水时展示）──
+        // ── v0.8.1 三段资金链路交叉核对仪表卡（仅当存在结汇通道流水时展示）──
         data?.consolidated?.fundChain && (() => {
           const fc = data.consolidated.fundChain
           const totalIn = (fc.stage2WalletInboundCny || 0) + (fc.stage2OtherInboundCny || 0)
@@ -1055,8 +1179,8 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'ftx-bhead' },
-              h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' } }, h('h2', null, '三段资金链路交叉核对'), h('span', { style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, '平台放款 → 结汇通道入账 → 境内对公收汇（结汇流水绝不重复计税）')),
-              h('span', { className: 'ftx-secmeta' }, fc.hasSalesEvidence ? '3-STAGE / ACTIVE' : 'WALLET ONLY'),
+              h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' } }, h('h2', null, '三段资金链路交叉核对'), h('span', { style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, '平台放款 → 结汇通道入账 → 钱包转出至企业户[待核银行回单]（结汇流水绝不重复计税）')),
+              h('span', { className: 'ftx-secmeta' }, fc.hasSalesEvidence ? '3-STAGE / PENDING RECEIPT' : 'WALLET ONLY'),
             ),
             h(
               'div',
@@ -1083,10 +1207,10 @@ window.__ModuleLoader__.load({
               ),
               h(
                 'div',
-                { className: 'ftx-chain-cell ok' },
-                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '③ 境内对公合规结汇'),
+                { className: 'ftx-chain-cell ok', title: fc.stage3StatusNote || '钱包显示已向企业账户转出，需财务核对银行入账回单后标为已复核' },
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '③ 钱包转出至企业户（待核银行回单）'),
                 h('b', { className: 'ftx-mono', style: { fontSize: 18, color: 'var(--ftx-ok)' } }, `¥${Math.round(fc.stage3CorporateRepatriatedCny).toLocaleString()}`),
-                h('span', { className: 'ftx-mono', style: { fontSize: 11, color: 'var(--ftx-ok)', fontWeight: 700 } }, fc.corporateRepatriationRatePct !== null ? `对公合规回流率 ${fc.corporateRepatriationRatePct}%` : '对公回流率 待核'),
+                h('span', { className: 'ftx-mono', style: { fontSize: 11, color: 'var(--ftx-ok)', fontWeight: 700 } }, fc.corporateRepatriationRatePct !== null ? `企业户转出占比 ${fc.corporateRepatriationRatePct}% · 待核回单` : '企业户转出占比 待核'),
               ),
               h(
                 'div',
@@ -1099,12 +1223,14 @@ window.__ModuleLoader__.load({
             hasDenom &&
               h(
                 'div',
-                { className: 'ftx-chain-bar', title: `对公 ${pCorp.toFixed(1)}% / 私户 ${pPers.toFixed(1)}% / 待核与坐支 ${pSpend.toFixed(1)}% / 滞留与费 ${pRet.toFixed(1)}%` },
+                { className: 'ftx-chain-bar', title: `转出企业户(待核回单) ${pCorp.toFixed(1)}% / 私户 ${pPers.toFixed(1)}% / 待核与坐支 ${pSpend.toFixed(1)}% / 滞留与费 ${pRet.toFixed(1)}%` },
                 pCorp > 0 && h('div', { style: { width: `${pCorp}%`, background: 'var(--ftx-ok)' } }),
                 pPers > 0 && h('div', { style: { width: `${pPers}%`, background: 'var(--ftx-orange)' } }),
                 pSpend > 0 && h('div', { style: { width: `${pSpend}%`, background: '#d97706' } }),
                 pRet > 0 && h('div', { style: { width: `${pRet}%`, background: 'var(--ftx-mut)', opacity: 0.45 } }),
               ),
+            fc.stage3StatusNote &&
+              h('div', { style: { fontSize: 11.5, color: 'var(--ftx-mut)', lineHeight: 1.45 } }, `口径提示：${fc.stage3StatusNote}`),
             fc.byCurrency && fc.byCurrency.length > 0 &&
               h(
                 'div',
@@ -1114,8 +1240,8 @@ window.__ModuleLoader__.load({
                     'span',
                     { key: c.currency, className: 'ftx-mono', style: { padding: '2px 7px', border: '1px solid var(--ftx-line)', borderRadius: 3, background: 'var(--ftx-surface)' } },
                     fc.hasSalesEvidence
-                      ? `${c.currency}: 放款 ${c.platformPayout.toLocaleString()} → 入账 ${c.walletInbound.toLocaleString()} (${c.stage1to2Gap >= 0 ? '+' : ''}${c.stage1to2Gap.toLocaleString()}) → 对公 ${c.corporateWithdraw.toLocaleString()}`
-                      : `${c.currency}: 入账 ${c.walletInbound.toLocaleString()} → 对公 ${c.corporateWithdraw.toLocaleString()}`,
+                      ? `${c.currency}: 放款 ${c.platformPayout.toLocaleString()} → 入账 ${c.walletInbound.toLocaleString()} (${c.stage1to2Gap >= 0 ? '+' : ''}${c.stage1to2Gap.toLocaleString()}) → 转出企业户(待核回单) ${c.corporateWithdraw.toLocaleString()}`
+                      : `${c.currency}: 入账 ${c.walletInbound.toLocaleString()} → 转出企业户(待核回单) ${c.corporateWithdraw.toLocaleString()}`,
                   ),
                 ),
               ),
@@ -1154,7 +1280,7 @@ window.__ModuleLoader__.load({
                   h(
                     'table',
                     { className: 'ftx-tbl' },
-                    h('thead', null, h('tr', null, h('th', null, '通道 · 站点'), h('th', null, '参考毛额 / 通道入账'), h('th', null, '放款 / 对公回流'), h('th', null, '资金核验'))),
+                    h('thead', null, h('tr', null, h('th', null, '通道 · 站点'), h('th', null, '参考毛额 / 通道入账'), h('th', null, '放款 / 转出企业户(待核回单)'), h('th', null, '资金核验'))),
                     h(
                       'tbody',
                       null,
@@ -1199,14 +1325,27 @@ window.__ModuleLoader__.load({
                 )
               : h(
                   'div',
-                  { style: { padding: '22px 14px', border: '1px dashed var(--ftx-chassis-bd)', borderRadius: 4, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' } },
-                  h('div', { style: { fontSize: 12.5, color: 'var(--ftx-mut)' } }, '尚未载入账单，可直接试用内置零文件脱敏沙盒：'),
+                  { style: { padding: '22px 16px', border: '1px dashed var(--ftx-chassis-bd)', borderRadius: 4, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 11, alignItems: 'center' } },
+                  h('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--ftx-ink)' } }, '本机离线核对平台放款、结汇入账与待补凭证'),
+                  h('div', { style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, '无需配置 IMA，原始账单留在本机内存不上传，10ms 输出老板与财务核对单'),
                   h(
                     'div',
                     { style: { display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' } },
-                    h('button', { type: 'button', className: 'ftx-btn-sm on', disabled: busy, onClick: () => handleDemo('v8') }, t.runDemoV8),
-                    h('button', { type: 'button', className: 'ftx-btn-sm', disabled: busy, onClick: () => handleDemo('v7') }, t.runDemoV7),
-                    h('button', { type: 'button', className: 'ftx-btn-sm', disabled: busy, onClick: () => handleDemo('all') }, t.runDemo),
+                    h('button', { type: 'button', className: 'ftx-act pri', style: { height: 38, padding: '0 16px' }, disabled: busy, onClick: () => handleDemo('v8') }, t.runDemoV8),
+                    h(
+                      'label',
+                      { className: 'ftx-act drop', style: { height: 38, padding: '0 16px' } },
+                      h(Icon, { kind: 'upload', size: 15 }),
+                      h('span', null, busy ? t.parsing : '核对我的账单'),
+                      h('input', { type: 'file', multiple: true, accept: '.csv,.tsv,.txt,.xlsx,.xlsm,.zip', style: { display: 'none' }, onChange: (e) => { handleFiles(e.target.files); e.target.value = '' } }),
+                    ),
+                  ),
+                  h(
+                    'div',
+                    { style: { display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center', fontSize: 11, color: 'var(--ftx-mut)', alignItems: 'center' } },
+                    h('span', null, '其他示例：'),
+                    h('button', { type: 'button', className: 'ftx-btn-sm', style: { padding: '2px 7px', fontSize: 11 }, disabled: busy, onClick: () => handleDemo('v7') }, t.runDemoV7),
+                    h('button', { type: 'button', className: 'ftx-btn-sm', style: { padding: '2px 7px', fontSize: 11 }, disabled: busy, onClick: () => handleDemo('all') }, t.runDemo),
                   ),
                 ),
             h(
@@ -1307,23 +1446,37 @@ window.__ModuleLoader__.load({
             h('input', { type: 'file', multiple: true, accept: '.csv,.tsv,.txt,.xlsx,.xlsm,.zip', style: { display: 'none' }, onChange: (e) => { handleFiles(e.target.files); e.target.value = '' } }),
           ),
           h('button', { type: 'button', className: 'ftx-act pri', disabled: isWalletOnly, title: isWalletOnly ? '纯结汇通道未含销售报送额，请合并拖入电商账单' : '', onClick: jumpBridge }, h('span', null, isWalletOnly ? '需合并销售账单方能桥接' : '一键带入四层桥接精算 →')),
-          h('button', { type: 'button', className: 'ftx-act', disabled: !data, onClick: () => data && downloadText(data.reportHtml, '跨境店铺税务初筛体检诊断书.html', 'text/html;charset=utf-8') }, h(Icon, { kind: 'download', size: 16 }), t.exportHtml),
-          h('button', { type: 'button', className: 'ftx-act', disabled: !data?.anomaliesCsv, onClick: () => data?.anomaliesCsv && downloadText(data.anomaliesCsv, '跨境店铺异常排雷清单.csv', 'text/csv;charset=utf-8') }, h(Icon, { kind: 'download', size: 16 }), t.exportCsv),
+          h('button', { type: 'button', className: 'ftx-act', disabled: !data, onClick: () => data && downloadText(data.reportHtml, '跨境月结核对单.html', 'text/html;charset=utf-8') }, h(Icon, { kind: 'download', size: 16 }), t.exportHtml),
+          h('button', { type: 'button', className: 'ftx-act', disabled: !data?.anomaliesCsv, onClick: () => data?.anomaliesCsv && downloadText(data.anomaliesCsv, '财务待核派活清单.csv', 'text/csv;charset=utf-8') }, h(Icon, { kind: 'download', size: 16 }), t.exportCsv),
         ),
         data &&
           h(
             'div',
-            { style: { display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, fontSize: 11.5, color: 'var(--ftx-mut)' } },
+            { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, fontSize: 11.5, color: 'var(--ftx-mut)' } },
             h(
               'div',
-              { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+              { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
               h('button', { type: 'button', className: 'ftx-btn-sm on', onClick: () => handleDemo('v8') }, t.runDemoV8),
               h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleDemo('v7') }, t.runDemoV7),
               h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleDemo('all') }, t.runDemo),
-              h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => downloadText(data.reportMd, '跨境店铺税务初筛体检诊断书.md', 'text/markdown;charset=utf-8') }, t.exportMd),
+              h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => downloadText(data.reportMd, '跨境月结核对单.md', 'text/markdown;charset=utf-8') }, t.exportMd),
               hasHistory && h('button', { type: 'button', className: 'ftx-btn-sm', onClick: handleExportTrendReport }, t.exportTrendHtml),
+              h(
+                'label',
+                { style: { display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: 'var(--ftx-mut)' }, title: '对外核对单默认纯洁无推广，勾选后在文末附带 IMA 与母表参考指引' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: includeAppendix,
+                  onChange: (e) => {
+                    const nextVal = e.target.checked
+                    setIncludeAppendix(nextVal)
+                    if (data) runParse({ files: uploadedFiles, demo: demoMode, appendixOverride: nextVal })
+                  },
+                }),
+                '导出时附带参考指引附页',
+              ),
             ),
-            h('span', null, '边界声明：本面板仅输出离线初筛与排雷结论，正式月结请结合 IMA 实战库与执业税务师复核'),
+            h('span', null, '边界声明：对外导出默认纯洁无推广；钱包转出至企业户须经财务核对银行入账回单确认'),
           ),
       )
     }

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -14,7 +14,7 @@ import {
   serializeSummary,
 } from '../lib/report.js'
 import { loadFintaxSettings, sanitizeCustomFxRates, saveFintaxSettings } from '../lib/ima.js'
-import { computeRolling12m, saveSnapshot } from '../lib/history.js'
+import { computeRolling12m, loadHistory, saveSnapshot } from '../lib/history.js'
 import { apply, createFintaxApiHandler } from '../index.js'
 
 function mockApiCall(handler, method, urlPath, bodyObj, admitted = true) {
@@ -160,8 +160,9 @@ test('v0.8 防重复计税铁律与三段资金交叉核对：demo:v8 销售总�
   // 资金账本闭合校验：对公 + 私户 + 待核 + 坐支 + 手续费 + 滞留 - 内部换汇净流 === 结汇通道入账总额
   const sumCheck = Math.round((fc.stage3CorporateRepatriatedCny + fc.stage3PersonalWithdrawCny + fc.stage3UnverifiedWithdrawCny + fc.directSpendCny + fc.walletFeesCny + fc.retainedOffshoreCny - fc.internalFxNetCny) * 100) / 100
   assert.equal(sumCheck, fc.stage2WalletInboundCny)
-  assert.ok(fc.alerts.some((a) => a.includes('P0 公私混收')))
-  assert.ok(fc.alerts.some((a) => a.includes('资金缺口')))
+  assert.ok(fc.alerts.some((a) => a.includes('P0 优先核查')))
+  assert.ok(fc.alerts.some((a) => a.includes('一/二段差额待解释')))
+  assert.equal(fc.stage3VerificationStatus, 'pending_bank_receipt')
 
   // HTML / MD 报告均包含结汇通道与三段核对章节
   const html = renderDiagnosticReportHtml({ summaries: sV8, consolidated: cV8, version: '0.8.0' })
@@ -379,11 +380,12 @@ test('v0.8 对抗回归 3：跨文件同币种消假滞留、异币种单边未�
   const merged = buildConsolidatedReconcile([...wfIn, ...wfOut], { fxRates: { USD: 7.25 } })
   assert.equal(merged.fundChain.retainedOffshoreCny, 0)
   assert.equal(merged.fundChain.stage1PlatformPayoutCny, null)
-  // wallet_only 章节连续：从「一、」开始且不重复输出告警
-  const md = renderDiagnosticReportMd({ summaries: [...wfIn, ...wfOut], consolidated: merged, version: '0.8.0' })
-  assert.ok(md.includes('## 一、结汇收款通道'))
-  assert.ok(md.includes('## 二、三段资金链路交叉核对'))
-  assert.ok(md.includes('## 三、异常交易雷达'))
+  // wallet_only 章节连续：从「一、本期核对范围与老板一页结论」起顺延且不重复输出告警
+  const md = renderDiagnosticReportMd({ summaries: [...wfIn, ...wfOut], consolidated: merged, version: '0.8.1' })
+  assert.ok(md.includes('## 一、本期核对范围与老板一页结论'))
+  assert.ok(md.includes('## 二、结汇收款通道'))
+  assert.ok(md.includes('## 三、三段资金链路交叉核对'))
+  assert.ok(md.includes('## 四、财务待核派活清单'))
   assert.equal(md.split('独立体检模式').length - 1, 1)
 
   // 异币种折人民币恰好抵消（USD 放款 785×7.25=5691.25 vs EUR 钱包入账 725×7.85=5691.25），必须检出单边未匹配！
@@ -454,4 +456,170 @@ test('v0.8 对抗回归 4：env 覆盖下保存汇率不擦除磁盘 KB、严格
     else process.env.IMA_DEFAULT_KB_ID = prevEnvKb
     rmSync(tmpDir, { recursive: true, force: true })
   }
+})
+
+
+test('v0.8.1 第三段真实口径与对外纯洁核对单：待核银行回单、派活清单、默认无推广、可勾选附页', () => {
+  const sV8 = parsePlatformStatement('demo:v8')
+  const cV8 = buildConsolidatedReconcile(sV8, { fxRates: { USD: 7.25, EUR: 7.85 } })
+  assert.equal(cV8.fundChain.stage3VerificationStatus, 'pending_bank_receipt')
+  assert.ok(cV8.fundChain.stage3StatusNote.includes('银行收款回单'))
+
+  const htmlDefault = renderDiagnosticReportHtml({ summaries: sV8, consolidated: cV8, version: '0.8.1' })
+  const mdDefault = renderDiagnosticReportMd({ summaries: sV8, consolidated: cV8, version: '0.8.1' })
+  for (const doc of [htmlDefault, mdDefault]) {
+    assert.ok(doc.includes('本期核对范围与老板一页结论'))
+    assert.ok(doc.includes('财务待核派活清单'))
+    assert.ok(doc.includes('下一步待补凭证'))
+    assert.ok(doc.includes('待核银行回单'))
+    assert.ok(!doc.includes('境内对公合规回流'), '不应再以钱包流水直接宣称境内对公合规回流')
+    assert.ok(!doc.includes('197 篇'), '默认对外核对单不得附带推广附页')
+    assert.ok(!doc.includes('一表通母表'), '默认对外核对单不得附带母表推广文案')
+  }
+
+  const htmlOptIn = renderDiagnosticReportHtml({ summaries: sV8, consolidated: cV8, version: '0.8.1', includeResourceAppendix: true })
+  assert.ok(htmlOptIn.includes('扩展参考附页'))
+  const csv = renderAnomaliesCsv({ summaries: sV8 })
+  assert.ok(csv.includes('下一步待补凭证'))
+})
+
+test('v0.8.1 归档身份防串账与 409 冲突保护：改名不累加、双店不覆盖、旧档待认领、缺档与零收入分离', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'fintax-v081-hist-'))
+  const prevDir = process.env.FINTAX_CONFIG_DIR
+  process.env.FINTAX_CONFIG_DIR = tmpDir
+  try {
+    // 1) 写入旧版 v1 JSON（无 entityName/storeScope），确认无损迁移并标记「待认领」
+    writeFileSync(
+      join(tmpDir, 'fintax_history.json'),
+      JSON.stringify({
+        schema: 'dsh-fintax-history-v1',
+        entries: [
+          { id: 'legacy_1', month: '2026-08', label: '老档8月', platforms: ['Amazon'], grossCny: 200000, netSalesCny: 190000, payoutCny: 150000 },
+        ],
+      }),
+      'utf8',
+    )
+    const migrated = loadHistory()
+    assert.equal(migrated.length, 1)
+    assert.equal(migrated[0].entityName, '待认领')
+    assert.equal(migrated[0].ownershipStatus, 'unclaimed')
+
+    const handler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+
+    // 2) 同主体 + 同店铺 + 同月份：首次保存成功，改显示备注再以 check 提交返回 HTTP 409 防重复累加！
+    const first = await mockApiCall(handler, 'POST', '/api/fintax/history', {
+      month: '2026-10', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-US主店',
+      vatTaxpayerType: 'small_scale', citAssessedMode: 'assessed_4pct',
+      label: '十月初版', platforms: ['Amazon'], grossCny: 500000, netSalesCny: 480000, payoutCny: 360000,
+      conflictMode: 'check',
+    })
+    assert.equal(first.statusCode, 200)
+    assert.equal(first.json.entry.entityName, '深圳星海贸易有限公司')
+
+    const conflictRes = await mockApiCall(handler, 'POST', '/api/fintax/history', {
+      month: '2026-10', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-US主店',
+      label: '十月改名复核版', platforms: ['Amazon'], grossCny: 510000, netSalesCny: 490000, payoutCny: 370000,
+      conflictMode: 'check',
+    })
+    assert.equal(conflictRes.statusCode, 409)
+    assert.equal(conflictRes.json.conflict, true)
+
+    // 3) 确认覆盖替换：原档被更新，数量不增加
+    const replaced = await mockApiCall(handler, 'POST', '/api/fintax/history', {
+      month: '2026-10', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-US主店',
+      label: '十月改名复核版', platforms: ['Amazon'], grossCny: 510000, netSalesCny: 490000, payoutCny: 370000,
+      conflictMode: 'replace',
+    })
+    assert.equal(replaced.statusCode, 200)
+    assert.equal(replaced.json.deduplicated, true)
+
+    // 4) 同公司同月另一店铺（EU副店）不得覆盖 US 主店，而是独立共存累加
+    const store2 = await mockApiCall(handler, 'POST', '/api/fintax/history', {
+      month: '2026-10', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-EU副店',
+      label: '十月欧洲店', platforms: ['Amazon'], grossCny: 200000, netSalesCny: 190000, payoutCny: 140000,
+      conflictMode: 'check',
+    })
+    assert.equal(store2.statusCode, 200)
+
+    // 5) 确认零收入月份（zeroSalesConfirmed: true）允许归档且与缺档月份分开统计
+    const zeroMo = await mockApiCall(handler, 'POST', '/api/fintax/history', {
+      month: '2026-09', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-US主店',
+      label: '九月休店零收入', platforms: ['Amazon'], grossCny: 0, netSalesCny: 0, payoutCny: 0,
+      zeroSalesConfirmed: true, conflictMode: 'check',
+    })
+    assert.equal(zeroMo.statusCode, 200)
+
+    // 6) 按主体筛选查询：排除「待认领」旧档，精准统计覆盖月数、缺档月数与确认零收入月数
+    const scoped = await mockApiCall(handler, 'GET', '/api/fintax/history?entity=%E6%B7%B1%E5%9C%B3%E6%98%9F%E6%B5%B7%E8%B4%B8%E6%98%93%E6%9C%89%E9%99%90%E5%85%AC%E5%8F%B8')
+    assert.equal(scoped.statusCode, 200)
+    const r = scoped.json.rolling12m
+    assert.equal(r.activeEntity, '深圳星海贸易有限公司')
+    assert.equal(r.totalNetSalesCny, 680000) // 490000 + 190000，不含老档 190000！
+    assert.equal(r.monthCount, 2) // 2026-09 + 2026-10
+    assert.equal(r.missingMonthsCount, 10)
+    assert.equal(r.zeroSalesMonthsCount, 1)
+    assert.equal(r.taxYear, '2026')
+    assert.equal(r.taxYearNetSalesCny, 680000)
+
+    // 7) 趋势月报 HTML 按主体隔离且含本纳税年度情景估算与待认领/缺档说明
+    const rpt = await mockApiCall(handler, 'GET', '/api/fintax/history/report?entity=%E6%B7%B1%E5%9C%B3%E6%98%9F%E6%B5%B7%E8%B4%B8%E6%98%93%E6%9C%89%E9%99%90%E5%85%AC%E5%8F%B8')
+    assert.equal(rpt.statusCode, 200)
+    assert.ok(rpt.json.reportHtml.includes('本纳税年度情景估算'))
+    assert.ok(rpt.json.reportHtml.includes('缺档 10 月'))
+    assert.ok(rpt.json.reportHtml.includes('确认零收入 1 月'))
+    assert.ok(!rpt.json.reportHtml.includes('老档8月'))
+  } finally {
+    if (prevDir === undefined) delete process.env.FINTAX_CONFIG_DIR
+    else process.env.FINTAX_CONFIG_DIR = prevDir
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
+})
+
+test('v0.8.1 未知格式账单诊断：仅返回脱敏表头列名，严禁泄露明细行敏感数据', () => {
+  const unknownCsv = [
+    'ShopCode,BizDate,GrossAmt,CustEmail',
+    'S-01,2026-10-15,999.00,PRIVATE_BUYER_SECRET@example.com',
+  ].join('\n')
+  assert.throws(
+    () => parseStatementBuffer(Buffer.from(unknownCsv, 'utf8'), 'UnknownChannel_Oct.csv'),
+    (err) => {
+      assert.ok(err.message.includes('ShopCode'))
+      assert.ok(err.message.includes('BizDate'))
+      assert.ok(err.message.includes('GrossAmt'))
+      assert.ok(!err.message.includes('PRIVATE_BUYER_SECRET@example.com'), '报错信息不得泄露原始明细行数据')
+      return true
+    },
+  )
+})
+
+test('v0.8.1 工程收口基准测试：50,000 行大账单端到端解析、对账与 HTML/CSV 导出完整性与耗时', () => {
+  const N = 50_000
+  const lines = new Array(N + 1)
+  lines[0] = 'date/time,settlement id,type,order id,sku,description,quantity,marketplace,fulfillment,product sales,shipping credits,promotional rebates,marketplace withheld tax,selling fees,fba fees,other transaction fees,other,total'
+  for (let i = 1; i <= N; i++) {
+    // 每 5,000 行注入 1 笔水平失衡 P0 异常（共 10 笔），其余 49,990 笔完全守恒
+    const tamperedTotal = i % 5000 === 0 ? '80.00' : '85.00'
+    lines[i] = `2026-10-15 08:00:00 UTC,SET-50K,Order,ORD-${i},SKU-${i % 100},Item,1,amazon.com,Amazon,100.00,0.00,0.00,0.00,-15.00,0.00,0.00,0.00,${tamperedTotal}`
+  }
+  const buf = Buffer.from(lines.join('\n'), 'utf8')
+  const t0 = performance.now()
+  const summaries = parseStatementBuffer(buf, 'Amazon_US_50000Rows_2026-10.csv')
+  const consolidated = buildConsolidatedReconcile(summaries, { fxRates: { USD: 7.20 } })
+  const html = renderDiagnosticReportHtml({ summaries, consolidated, version: '0.8.1' })
+  const csv = renderAnomaliesCsv({ summaries })
+  const elapsedMs = Math.round(performance.now() - t0)
+
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].rawRowCount, N)
+  assert.equal(fmtAmount(summaries[0].grossSales), '5000000.00')
+  assert.equal(fmtAmount(summaries[0].platformCommission), '750000.00')
+  // 10 笔每笔少 5.00 USD → 水平差额恰好 -50.00 USD，共 10 条 P0
+  assert.equal(fmtAmount(summaries[0].horizontalDiffTotal), '-50.00')
+  assert.equal(summaries[0].anomalies.length, 10)
+  assert.equal(consolidated.totals.grossCny, 36_000_000)
+  assert.ok(html.includes('共 50000 行明细'))
+  const csvRows = csv.trim().split(/\r?\n/)
+  assert.equal(csvRows.length, 12, 'CSV 必须全量导出 1 表头 + 10 P0 异常 + 1 边界声明行')
+  assert.ok(elapsedMs < 15_000, `50,000 行全链路耗时应 < 15s，实际 ${elapsedMs}ms`)
+  console.log(`  [benchmark] 50,000 行 Amazon 账单解析 + 合并对账 + HTML/CSV 导出总耗时：${elapsedMs} ms`)
 })
