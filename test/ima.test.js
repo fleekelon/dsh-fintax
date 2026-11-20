@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { apply } from '../index.js'
-import { clearImaCache, imaCall, searchImaKnowledge } from '../lib/ima.js'
+import { clearImaCache, imaCall, readImaTextDownload, searchImaKnowledge } from '../lib/ima.js'
 
 const endpoint = 'openapi/wiki/v1/search_knowledge'
 const auditQuestionsPath = process.env.FINTAX_IMA_QUESTIONS
@@ -75,6 +75,42 @@ test('IMA：首屏达到两项、已是单短词或正在翻页时直接返回',
     assert.equal(data.fallback, undefined)
   }
   assert.deepEqual(calls, [request(long), request('9610'), request(long, 'original-next')])
+})
+
+test('IMA：短语保留监管代码，并发刷新合并在途原词和短词', async (t) => {
+  const calls = mockSearch(t, async ({ query }) => {
+    await new Promise((resolve) => setImmediate(resolve))
+    return result(query === '1039' ? [item('1039')] : [])
+  })
+  for (const query of ['1039预退税', '1039出口的税务风险提示、报送差额以及平台更正']) {
+    const before = calls.length
+    const [left, right] = await Promise.all([
+      searchImaKnowledge(request(query), opts),
+      searchImaKnowledge(request(query), opts),
+    ])
+    assert.deepEqual(left, right)
+    assert.deepEqual(left.info_list, [item('1039')])
+    assert.ok(left.fallback.queries.includes('1039'))
+    assert.deepEqual(calls.slice(before).map(({ query: q }) => q), [query, ...left.fallback.queries])
+  }
+})
+
+test('IMA：只跟随白名单 HTTPS 下载，跨域重定向在出站前拒绝', async (t) => {
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    assert.equal(init.redirect, 'manual')
+    assert.equal(init.headers, undefined)
+    calls.push(url)
+    if (url.endsWith('/outside')) return new Response(null, { status: 302, headers: { location: 'https://unapproved.example/file' } })
+    if (url.endsWith('/inside')) return new Response(null, { status: 302, headers: { location: 'https://bucket.cos.ap-guangzhou.myqcloud.com/text' } })
+    return new Response('text fixture')
+  })
+  await assert.rejects(() => readImaTextDownload('https://unapproved.example/file'), { code: 'IMA_DOWNLOAD_HOST' })
+  assert.deepEqual(calls, [])
+  await assert.rejects(() => readImaTextDownload('https://ima.qq.com/outside'), { code: 'IMA_DOWNLOAD_HOST' })
+  assert.deepEqual(calls, ['https://ima.qq.com/outside'])
+  assert.equal(await readImaTextDownload('https://ima.qq.com/inside'), 'text fixture')
+  assert.equal(calls.at(-1), 'https://bucket.cos.ap-guangzhou.myqcloud.com/text')
 })
 
 test('IMA：短词请求部分失败时保留其他结果，原查询失败则直接报告错误', async (t) => {

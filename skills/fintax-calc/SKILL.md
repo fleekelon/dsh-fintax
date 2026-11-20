@@ -11,7 +11,7 @@ description: 税额试算、8 大跨境销售平台 + 3 大第三方结汇通道
 
 0. **若用户提供了原始结算账单或结汇流水文件（Amazon / TikTok Shop / Temu / 速卖通 AliExpress / Shopee / Shopify / PayPal / Stripe + 万里汇 WorldFirst / 派安盈 Payoneer / 空中云汇 Airwallex 的 `.csv` / `.tsv` / `.txt` / `.xlsx` 或 `.zip` 压缩包，或要求免文件演示 `demo:all` / `demo:v7` / `demo:v8` / `demo:wallets` / `demo:full`）**：
    - **优先直接调用 `fintax_parse_statement`**：单文件或 `.zip` 传 `file_path`，多月/多站点及第三方结汇流水批量合并传 `file_paths`；单币种汇率传 `fx_rate_to_cny`，多币种合并对账传 `fx_rates`（如 `{"USD": 7.18, "EUR": 7.82, "MYR": 1.62}`）及 `declared_vat_sales_cny`；需要留存或发给团队审阅时传 `export_report_path: "auto"`（可打印 `.html`）、`"auto.md"` 或 `"auto.csv"`（全量异常排雷清单 CSV）；
-   - 输出平台报送、财务会计、增值税与出口、企业所得税四层数据，单列资金桥接；若同时传入销售平台账单与第三方结汇流水（WorldFirst / Payoneer / Airwallex），工具自动分轨统计（绝不将结汇入账重复计入销售报送总额）并输出「平台放款 → 结汇通道入账 → 境内对公收汇」三段交叉核对、对公合规回流率、公私混收 P0 阻断与境外余额坐支 P1 预警。若检出 **P0 阻断级异常**（全托管供货混表或提现至个人私户），申报前**必须先提示剥离或整改**；对 PayPal/结汇余额坐支广告物流、Shopee 运费倒挂/预提税 WHT 等 P1 风险结合 `ima_search` 查阅整改规范。
+   - 输出平台报送、财务会计、增值税与出口、企业所得税四层数据，单列资金桥接。工具分轨统计销售与第三方结汇流水（WorldFirst / Payoneer / Airwallex），分别核对平台放款、结汇通道入账和钱包转出至疑似企业户。第三段标记待补银行回单，核对回单和入账户名后才报告已确认的银行实收。若检出 **P0 优先核查项**（全托管供货混表或提现至个人私户），申报前先提示剥离或整改。对 PayPal/结汇余额坐支广告物流、Shopee 运费倒挂/预提税 WHT 等 P1 风险，结合 `ima_search` 查阅整改规范。
 
 1. **明确口径并选 `fintax_calc` 场景（10 大确定性引擎）**：
    - **平台涉税报送、入账与申报核对** → `platform_tax_reconcile`。平台报送（或账单参考销售额）减实际申报销售额，正数表示前者较高。资金桥接独立列示，实际放款减理论放款，正数表示实际多收。支持 `selfRemitTaxNet`、`subsidies`、`reserveChange`、`cutoffAndFxDiff` 调整及净额法误报预警。

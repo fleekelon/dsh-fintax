@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { parsePlatformStatement, parseStatementBuffer, fmtAmount } from '../lib/statement.js'
+import { parsePlatformStatement, parseStatementBuffer, fmtAmount, parseAmount } from '../lib/statement.js'
 import {
   buildConsolidatedReconcile,
   renderAnomaliesCsv,
@@ -40,7 +40,7 @@ function mockApiCall(handler, method, urlPath, bodyObj, admitted = true) {
   })
 }
 
-test('v0.8 万里汇 WorldFirst：多币种拆表、对公/私户/坐支分类、换汇剥离、大额滞留与篡改阻断', () => {
+test('v0.8 万里汇 WorldFirst：多币种拆表、对公/私户/坐支分类、换汇剥离、余额待核与勾稽阻断', () => {
   const csv = [
     '交易时间,交易流水号,交易类型,对方户名,备注,币种,入账金额,出账金额,手续费,净变动,状态',
     '2026-11-05,WF-01,平台回款,Amazon.com Services LLC,US Settlement,USD,50000.00,0.00,0.00,50000.00,Completed',
@@ -65,11 +65,11 @@ test('v0.8 万里汇 WorldFirst：多币种拆表、对公/私户/坐支分类�
   assert.equal(fmtAmount(usd.walletMetrics.directSpend), '2000.00')
   assert.equal(fmtAmount(usd.walletMetrics.walletFees), '75.00')
   assert.equal(fmtAmount(usd.walletMetrics.internalFxStripped), '1500.00')
-  // 滞留未结汇 = 50000 - 20000 - 3000 - 2000 - 75 - 1500(内部换汇卖出) = 23425.00（占 46.85% >= 35% 触发滞留预警）
-  assert.equal(fmtAmount(usd.walletMetrics.unrepatriatedNet), '23425.00')
+  assert.equal(fmtAmount(usd.walletMetrics.signedNetFlow), '23425.00')
+  assert.equal(usd.walletMetrics.unrepatriatedNet, null)
   assert.ok(usd.anomalies.some((a) => a.severity === 'P0-阻断' && a.category.includes('个人私户')))
   assert.ok(usd.anomalies.some((a) => a.severity === 'P1-高危' && a.category.includes('坐支')))
-  assert.ok(usd.anomalies.some((a) => a.severity === 'P1-高危' && a.category.includes('滞留未结汇')))
+  assert.equal(usd.anomalies.some((a) => a.category.includes('滞留未结汇')), false)
   assert.ok(usd.anomalies.some((a) => a.severity === 'P2-关注' && a.category.includes('换汇')))
   // EUR 行篡改净变动触发水平守恒 P0 阻断
   assert.ok(eur.horizontalDiffTotal > 0n)
@@ -147,21 +147,25 @@ test('v0.8 防重复计税铁律与三段资金交叉核对：demo:v8 销售总�
   assert.equal(fc.hasSalesEvidence, true)
   assert.equal(fc.salesSheetCount, 3)
   assert.equal(fc.walletCount, 3)
-  // USD 差 -2300 × 7.25 = -16675；EUR 差 0
-  assert.equal(fc.stage1to2GapCny, -16675)
+  // 模拟文件未给可信主体、账号与匹配引用，只报告分别观察的金额。
+  assert.equal(fc.stage1to2GapCny, null)
+  assert.equal(fc.stage1to2Status, 'pending_evidence')
+  assert.equal(fc.stage1UnmatchedPayoutCny, 568061.5)
+  assert.equal(fc.stage2UnmatchedInboundCny, 551386.5)
   assert.equal(fc.stage3CorporateRepatriatedCny, 406875)
   assert.equal(fc.stage3PersonalWithdrawCny, 36250)
   assert.equal(fc.directSpendCny, 42040)
   assert.equal(fc.walletFeesCny, 2797.75)
-  // 滞留净额纳入内部换汇流出（-1000 USD × 7.25 + -800 EUR × 7.85 = -13530 CNY），账本完全闭合
+  // 期间净流纳入内部换汇流出（-1000 USD × 7.25 + -800 EUR × 7.85 = -13530 CNY）。
   assert.equal(fc.internalFxNetCny, -13530)
-  assert.equal(fc.retainedOffshoreCny, 49893.75)
+  assert.equal(fc.signedNetFlowCny, 49893.75)
+  assert.equal(fc.retainedOffshoreCny, null)
   assert.equal(fc.corporateRepatriationRatePct, 73.79)
-  // 资金账本闭合校验：对公 + 私户 + 待核 + 坐支 + 手续费 + 滞留 - 内部换汇净流 === 结汇通道入账总额
-  const sumCheck = Math.round((fc.stage3CorporateRepatriatedCny + fc.stage3PersonalWithdrawCny + fc.stage3UnverifiedWithdrawCny + fc.directSpendCny + fc.walletFeesCny + fc.retainedOffshoreCny - fc.internalFxNetCny) * 100) / 100
+  // 同一份模拟账单的期间净流可与已列资金变动勾稽。期末余额单独核对。
+  const sumCheck = Math.round((fc.stage3CorporateRepatriatedCny + fc.stage3PersonalWithdrawCny + fc.stage3UnverifiedWithdrawCny + fc.directSpendCny + fc.walletFeesCny + fc.signedNetFlowCny - fc.internalFxNetCny) * 100) / 100
   assert.equal(sumCheck, fc.stage2WalletInboundCny)
   assert.ok(fc.alerts.some((a) => a.includes('P0 优先核查')))
-  assert.ok(fc.alerts.some((a) => a.includes('一/二段差额待解释')))
+  assert.ok(fc.alerts.some((a) => a.includes('一/二段待核')))
   assert.equal(fc.stage3VerificationStatus, 'pending_bank_receipt')
 
   // HTML / MD 报告均包含结汇通道与三段核对章节
@@ -227,7 +231,7 @@ test('v0.8 HTTP API 路由端到端：汇率保存/读取、/parse demo:v8、/hi
   process.env.FINTAX_CONFIG_DIR = tmpDir
   try {
     const handler = createFintaxApiHandler({
-      getConnection: () => ({ admit: () => ({}) }),
+      getConnection: () => ({ admit: () => ({ peer: {} }) }),
     })
 
     // 未鉴权访问 /history/report 必须拦截
@@ -338,8 +342,8 @@ test('v0.8 对抗回归 1：匿名文件名防抢单、中文人民币规范化�
   assert.equal(wfRes[0].rawRowCount, 2)
   // 第 1 行入账 +100, fee=5, Net=+105 必须触发 P0 水平守恒阻断（绝不放行反向加费篡改！）
   assert.ok(wfRes[0].anomalies.some((a) => a.severity === 'P0-阻断' && a.category.includes('水平守恒')))
-  // 第 2 行 ABC Holdings Ltd 归对公结汇（绝不因 Holdings 误判冻结），且内含手续费 Net=-50 合法通过
-  assert.equal(fmtAmount(wfRes[0].walletMetrics.fxWithdrawToCorporate), '50.00')
+  // 第 2 行 ABC Holdings Ltd 归对公结汇（绝不因 Holdings 误判冻结），且内含手续费 Net=-50 时净本金为 48
+  assert.equal(fmtAmount(wfRes[0].walletMetrics.fxWithdrawToCorporate), '48.00')
   assert.equal(fmtAmount(wfRes[0].walletMetrics.frozenOrReturned), '0.00')
 })
 
@@ -378,7 +382,8 @@ test('v0.8 对抗回归 3：跨文件同币种消假滞留、异币种单边未�
     'utf8',
   ), 'WorldFirst_Out.csv')
   const merged = buildConsolidatedReconcile([...wfIn, ...wfOut], { fxRates: { USD: 7.25 } })
-  assert.equal(merged.fundChain.retainedOffshoreCny, 0)
+  assert.equal(merged.fundChain.signedNetFlowCny, 0)
+  assert.equal(merged.fundChain.retainedOffshoreCny, null)
   assert.equal(merged.fundChain.stage1PlatformPayoutCny, null)
   // wallet_only 章节连续：从「一、本期核对范围与老板一页结论」起顺延且不重复输出告警
   const md = renderDiagnosticReportMd({ summaries: [...wfIn, ...wfOut], consolidated: merged, version: '0.8.1' })
@@ -391,17 +396,17 @@ test('v0.8 对抗回归 3：跨文件同币种消假滞留、异币种单边未�
   // 异币种折人民币恰好抵消（USD 放款 785×7.25=5691.25 vs EUR 钱包入账 725×7.85=5691.25），必须检出单边未匹配！
   const usdSales = {
     role: 'sales_platform', period: '2026-11', platform: 'Amazon', site: 'US', currency: 'USD',
-    fileName: 'a.csv', rawRowCount: 1, grossSales: 1000n * 10000n, sellerDiscount: 0n,
-    taxReportingGrossRef: 1000n * 10000n, customerRefund: 0n, totalFees: 215n * 10000n,
+    fileName: 'a.csv', rawRowCount: 1, grossSales: parseAmount('1000'), sellerDiscount: 0n,
+    taxReportingGrossRef: parseAmount('1000'), customerRefund: 0n, totalFees: parseAmount('215'),
     platformSubsidy: 0n, selfRemitTaxNet: 0n, reserveNetChange: 0n,
-    actualPayout: 785n * 10000n, horizontalDiffTotal: 0n, anomalies: [],
+    actualPayout: parseAmount('785'), payoutEvidenceCount: 1, horizontalDiffTotal: 0n, anomalies: [],
   }
   const eurWallet = parseStatementBuffer(Buffer.from(
     'Transaction Date,Transaction ID,Financial Transaction Type,Beneficiary,Description,Currency,Amount,Fee,Status\n2026-11-02,AWX-1,GLOBAL_ACCOUNT_DEPOSIT,Amazon EU,Payout,EUR,725.00,0.00,SETTLED',
     'utf8',
   ), 'Airwallex_EU.csv')
   const crossCcy = buildConsolidatedReconcile([usdSales, ...eurWallet], { fxRates: { USD: 7.25, EUR: 7.85 } })
-  assert.equal(crossCcy.fundChain.stage1to2GapCny, 0)
+  assert.equal(crossCcy.fundChain.stage1to2GapCny, null)
   assert.ok(crossCcy.fundChain.alerts.some((a) => a.includes('跨币种单边未匹配')))
 })
 
@@ -433,13 +438,14 @@ test('v0.8 对抗回归 4：env 覆盖下保存汇率不擦除磁盘 KB、严格
     assert.equal(r401.statusCode, 401)
     assert.deepEqual(loadFintaxSettings().customFxRates, { USD: 7.26 })
 
-    const auth = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+    const auth = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ peer: {} }) }) })
     const r400 = await mockApiCall(auth, 'POST', '/api/fintax/settings', { customFxRates: [1, 2] })
     assert.equal(r400.statusCode, 400)
 
-    // 4) 重复归档同月同源快照自动幂等覆盖（绝不翻倍误触红线），且月度聚合保留 payoutCny 供 SVG 双柱渲染
-    saveSnapshot({ month: '2026-11', label: '11月主店', platforms: ['Amazon'], grossCny: 3_000_000, netSalesCny: 3_000_000, payoutCny: 2_400_000 })
-    const dup = saveSnapshot({ month: '2026-11', label: '11月主店', platforms: ['Amazon'], grossCny: 3_000_000, netSalesCny: 3_000_000, payoutCny: 2_400_000 })
+    // 4) 同月同源替换需显式确认目标及版本，月度聚合保留 payoutCny 供 SVG 双柱渲染
+    const input = { month: '2026-11', label: '11月主店', platforms: ['Amazon'], grossCny: 3_000_000, netSalesCny: 3_000_000, payoutCny: 2_400_000 }
+    const original = saveSnapshot(input).entry
+    const dup = saveSnapshot({ ...input, conflictMode: 'replace', targetId: original.id, expectedRevision: original.revision })
     assert.equal(dup.deduplicated, true)
     assert.equal(dup.history.length, 1)
     assert.equal(dup.rolling12m.totalNetSalesCny, 3_000_000)
@@ -504,21 +510,36 @@ test('v0.8.1 归档身份防串账与 409 冲突保护：改名不累加、双�
     assert.equal(migrated[0].entityName, '待认领')
     assert.equal(migrated[0].ownershipStatus, 'unclaimed')
 
-    const handler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+    const handler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ peer: {} }) }) })
+
+    const parseForArchive = async (month, gross, refund = 0) => {
+      const csv = [
+        'Created,ID,Type,Description,Currency,Amount,Fee,Net',
+        month + '-02,txn_a,charge,Sale,CNY,' + gross + ',0,' + gross,
+        ...(refund ? [month + '-03,re_a,refund,Refund,CNY,-' + refund + ',0,-' + refund] : []),
+      ].join('\n')
+      const parsed = await mockApiCall(handler, 'POST', '/api/fintax/parse', {
+        reportFormat: 'data', files: [{ name: 'sample.csv', dataBase64: Buffer.from(csv).toString('base64') }],
+      })
+      assert.equal(parsed.statusCode, 200)
+      assert.ok(parsed.json.archiveToken)
+      return parsed.json.archiveToken
+    }
 
     // 2) 同主体 + 同店铺 + 同月份：首次保存成功，改显示备注再以 check 提交返回 HTTP 409 防重复累加！
     const first = await mockApiCall(handler, 'POST', '/api/fintax/history', {
       month: '2026-10', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-US主店',
       vatTaxpayerType: 'small_scale', citAssessedMode: 'assessed_4pct',
-      label: '十月初版', platforms: ['Amazon'], grossCny: 500000, netSalesCny: 480000, payoutCny: 360000,
+      label: '十月初版', archiveToken: await parseForArchive('2026-10', 500000, 20000),
       conflictMode: 'check',
     })
     assert.equal(first.statusCode, 200)
     assert.equal(first.json.entry.entityName, '深圳星海贸易有限公司')
 
+    const updateToken = await parseForArchive('2026-10', 510000, 20000)
     const conflictRes = await mockApiCall(handler, 'POST', '/api/fintax/history', {
       month: '2026-10', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-US主店',
-      label: '十月改名复核版', platforms: ['Amazon'], grossCny: 510000, netSalesCny: 490000, payoutCny: 370000,
+      label: '十月改名复核版', archiveToken: updateToken,
       conflictMode: 'check',
     })
     assert.equal(conflictRes.statusCode, 409)
@@ -527,8 +548,8 @@ test('v0.8.1 归档身份防串账与 409 冲突保护：改名不累加、双�
     // 3) 确认覆盖替换：原档被更新，数量不增加
     const replaced = await mockApiCall(handler, 'POST', '/api/fintax/history', {
       month: '2026-10', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-US主店',
-      label: '十月改名复核版', platforms: ['Amazon'], grossCny: 510000, netSalesCny: 490000, payoutCny: 370000,
-      conflictMode: 'replace',
+      label: '十月改名复核版', archiveToken: updateToken,
+      conflictMode: 'replace', targetId: conflictRes.json.existing.id, expectedRevision: conflictRes.json.existing.revision,
     })
     assert.equal(replaced.statusCode, 200)
     assert.equal(replaced.json.deduplicated, true)
@@ -536,7 +557,7 @@ test('v0.8.1 归档身份防串账与 409 冲突保护：改名不累加、双�
     // 4) 同公司同月另一店铺（EU副店）不得覆盖 US 主店，而是独立共存累加
     const store2 = await mockApiCall(handler, 'POST', '/api/fintax/history', {
       month: '2026-10', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-EU副店',
-      label: '十月欧洲店', platforms: ['Amazon'], grossCny: 200000, netSalesCny: 190000, payoutCny: 140000,
+      label: '十月欧洲店', archiveToken: await parseForArchive('2026-10', 200000, 10000),
       conflictMode: 'check',
     })
     assert.equal(store2.statusCode, 200)
@@ -544,7 +565,7 @@ test('v0.8.1 归档身份防串账与 409 冲突保护：改名不累加、双�
     // 5) 确认零收入月份（zeroSalesConfirmed: true）允许归档且与缺档月份分开统计
     const zeroMo = await mockApiCall(handler, 'POST', '/api/fintax/history', {
       month: '2026-09', entityName: '深圳星海贸易有限公司', storeScope: 'Amazon-US主店',
-      label: '九月休店零收入', platforms: ['Amazon'], grossCny: 0, netSalesCny: 0, payoutCny: 0,
+      label: '九月休店零收入', archiveToken: await parseForArchive('2026-09', 0),
       zeroSalesConfirmed: true, conflictMode: 'check',
     })
     assert.equal(zeroMo.statusCode, 200)
@@ -577,16 +598,15 @@ test('v0.8.1 归档身份防串账与 409 冲突保护：改名不累加、双�
 
 test('v0.8.1 未知格式账单诊断：仅返回脱敏表头列名，严禁泄露明细行敏感数据', () => {
   const unknownCsv = [
-    'ShopCode,BizDate,GrossAmt,CustEmail',
+    'ShopCode,Date,Currency,CustEmail',
     'S-01,2026-10-15,999.00,PRIVATE_BUYER_SECRET@example.com',
   ].join('\n')
   assert.throws(
     () => parseStatementBuffer(Buffer.from(unknownCsv, 'utf8'), 'UnknownChannel_Oct.csv'),
     (err) => {
-      assert.ok(err.message.includes('ShopCode'))
-      assert.ok(err.message.includes('BizDate'))
-      assert.ok(err.message.includes('GrossAmt'))
-      assert.ok(!err.message.includes('PRIVATE_BUYER_SECRET@example.com'), '报错信息不得泄露原始明细行数据')
+      assert.equal(err.code, 'STATEMENT_UNKNOWN_FORMAT')
+      assert.deepEqual(err.diagnostics[0].candidateRows, [{ row: 1, fields: ['date', 'currency'] }])
+      assert.doesNotMatch(JSON.stringify(err.diagnostics) + err.message, /ShopCode|CustEmail|PRIVATE_BUYER_SECRET/)
       return true
     },
   )

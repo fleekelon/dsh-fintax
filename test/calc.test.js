@@ -298,7 +298,7 @@ test('工具层与图形化设置接口集成：准入防线、密钥脱敏、�
       inject: (_deps, cb) => {
         cb({
           webServer: { register: (r) => { mountedRoute = r; return () => {} } },
-          get: () => ({ admit: () => ({}) }),
+          get: () => ({ admit: () => ({ peer: {} }) }),
           effect: (fn) => fn(),
         })
       },
@@ -341,7 +341,7 @@ test('工具层与图形化设置接口集成：准入防线、密钥脱敏、�
     assert.equal(r401.status, 401)
 
     // 3) 正常已授权会话：保存凭证与默认库，且绝不回传明文密钥
-    const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+    const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ peer: {} }) }) })
     const saveRes = await invokeApi(okHandler, 'POST', '/api/fintax/credentials', {
       clientId: 'cid_secret_123',
       apiKey: 'key_secret_456',
@@ -527,7 +527,7 @@ test('Amazon Date Range CSV：跳过前置说明头、剥离商城代扣税、�
       'utf8',
     )
     const [badS] = parsePlatformStatement(badFile)
-    assert.ok(badS.anomalies.some((a) => a.severity.startsWith('P0') && a.refId === 'BAD-999'))
+    assert.ok(badS.anomalies.some((a) => a.severity.startsWith('P0') && /^待核-\d+$/.test(a.refId)))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -561,6 +561,7 @@ test('TikTok Shop 多工作表 XLSX 零依赖解析：还原平台补贴、达�
         '<c r="I1" t="inlineStr"><is><t>Commission fee</t></is></c>' +
         '<c r="J1" t="inlineStr"><is><t>Affiliate commission</t></is></c>' +
         '<c r="K1" t="inlineStr"><is><t>Total settlement amount</t></is></c>' +
+        '<c r="L1" t="inlineStr"><is><t>Statement ID</t></is></c>' +
         '</row>' +
         // POP 订单：200 - 商家折扣 20 + 平台补贴 15 - 佣金 10 - 达人佣金 25 = 160.00
         '<row r="2">' +
@@ -575,6 +576,7 @@ test('TikTok Shop 多工作表 XLSX 零依赖解析：还原平台补贴、达�
         '<c r="I2"><v>-10</v></c>' +
         '<c r="J2"><v>-25</v></c>' +
         '<c r="K2"><v>160</v></c>' +
+        '<c r="L2" t="inlineStr"><is><t>ST-100</t></is></c>' +
         '</row>' +
         // 混入一笔全托管记录 -> 必须触发 P0 阻断！
         '<row r="3">' +
@@ -589,6 +591,7 @@ test('TikTok Shop 多工作表 XLSX 零依赖解析：还原平台补贴、达�
         '<c r="I3"><v>0</v></c>' +
         '<c r="J3"><v>0</v></c>' +
         '<c r="K3"><v>50</v></c>' +
+        '<c r="L3" t="inlineStr"><is><t>ST-100</t></is></c>' +
         '</row>' +
         '</sheetData></worksheet>',
       'xl/worksheets/sheet2.xml':
@@ -688,7 +691,7 @@ test('v0.4.1 回归：platformTaxReconcile 计入待自申报流转税 + Stripe 
   // 2) /api/fintax/status 返回 version 与 package.json 一致
   const { apply, createFintaxApiHandler } = await import('../index.js')
   const pkgVer = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
-  const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+  const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ peer: {} }) }) })
   const req = Readable.from([])
   req.method = 'GET'
   req.url = '/api/fintax/status'
@@ -715,7 +718,7 @@ test('v0.4.1 回归：platformTaxReconcile 计入待自申报流转税 + Stripe 
     assert.equal(fmtAmount(ss.actualPayout), '810.00')
     assert.equal(fmtAmount(ss.statementPayoutDiff), '0.00')
     assert.equal(fmtAmount(ss.uncapturedVoidExcluded), '0.00')
-    assert.ok(ss.anomalies.some((a) => a.category.includes('提现/打款失败') && a.refId === 'po_fail'))
+    assert.ok(ss.anomalies.some((a) => a.category.includes('提现/打款失败') && /^待核-\d+$/.test(a.refId)))
 
     // 4) XLSX sharedStrings 含 <rPh> 注音引导标签时不污染单元格文本
     const xlsxBuf = buildTestXlsx({
@@ -827,7 +830,7 @@ test('v0.4.2 回归：科学计数法、Amazon V2 AU/DD-MM-YYYY/佣金税分离�
     assert.equal(fmtAmount(ss.uncapturedVoidExcluded), '0.00')
     assert.equal(fmtAmount(ss.actualPayout), '77.00')
     assert.equal(fmtAmount(ss.statementPayoutDiff), '0.00')
-    assert.ok(ss.anomalies.some((a) => a.refId === 'pc_1' && a.category.includes('提现/打款失败')))
+    assert.ok(ss.anomalies.some((a) => /^待核-\d+$/.test(a.refId) && a.category.includes('提现/打款失败')))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -1173,7 +1176,7 @@ test('v0.6.0 回归：工作台后端 /api/fintax/parse 与 /api/fintax/calc 全
   const r401 = await invoke(denyHandler, 'POST', '/api/fintax/parse', { demo: 'all' })
   assert.equal(r401.status, 401)
 
-  const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+  const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ peer: {} }) }) })
 
   // 1. /api/fintax/calc 全 7 大场景确定性试算校验
   const guiDefaults = [

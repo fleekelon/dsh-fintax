@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-fintax',
   factory(require) {
     const React = require('react')
-    const { createElement: h, useState, useEffect, useCallback, useRef } = React
+    const { createElement: h, useState, useEffect, useCallback, useMemo, useRef } = React
 
     const NS = 'settings.fintax'
     const PANEL_ID = 'dsh-fintax'
@@ -49,7 +49,7 @@ window.__ModuleLoader__.load({
         parsing: '解析中…',
         recalcBtn: '按汇率重算总对账',
         saveFxDefault: '保存为默认汇率',
-        resetFxDefault: '恢复内置参考汇率',
+        resetFxDefault: '清除保存的汇率',
         exportHtml: '导出老板版 HTML 核对单',
         exportMd: '导出 Markdown (.md)',
         exportCsv: '导出财务待核 CSV',
@@ -112,7 +112,7 @@ window.__ModuleLoader__.load({
         parsing: 'Parsing…',
         recalcBtn: 'Recalculate FX',
         saveFxDefault: 'Save default FX',
-        resetFxDefault: 'Reset FX',
+        resetFxDefault: 'Clear saved FX rates',
         exportHtml: 'Export HTML Report',
         exportMd: 'Export Markdown',
         exportCsv: 'Export Anomaly CSV',
@@ -146,7 +146,7 @@ window.__ModuleLoader__.load({
       },
     }
 
-    const DEFAULT_FX = {
+    const DEMO_FX = {
       USD: 7.18, EUR: 7.82, GBP: 9.15, AUD: 4.72, CAD: 5.18, JPY: 0.047,
       SGD: 5.36, MYR: 1.62, THB: 0.21, VND: 0.00028, PHP: 0.125, IDR: 0.00046,
       BRL: 1.26, MXN: 0.36, TWD: 0.22, HKD: 0.92, RMB: 1, CNY: 1,
@@ -154,6 +154,19 @@ window.__ModuleLoader__.load({
 
     const ADAPTERS = ['PayPal', 'AliExpress', 'Shopee', 'Amazon', 'TikTok Shop', 'Temu', 'Shopify', 'Stripe']
     const WALLET_ADAPTERS = ['WorldFirst', 'Payoneer', 'Airwallex']
+    const MAX_UPLOAD_FILES = 24
+    const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+    const ANOMALY_PAGE_SIZE = 12
+    const DIAGNOSTIC_LABELS = new Map([
+      ['STATEMENT_UNKNOWN_FORMAT', '未识别表头'],
+      ['STATEMENT_CANDIDATE_CONFLICT', '候选格式冲突'],
+      ['STATEMENT_EMPTY', '无可解析明细'],
+      ['STATEMENT_AMOUNT_INVALID', '金额格式待核'],
+      ['STATEMENT_LIMIT', '超过解析上限'],
+      ['STATEMENT_INVALID_ARCHIVE', '压缩包或工作簿无效'],
+      ['STATEMENT_NESTED_ARCHIVE', '压缩包内含不支持的文件'],
+      ['STATEMENT_INVALID_FILE', '账单文件无效'],
+    ])
 
     const CALC_SCENARIOS = [
       {
@@ -168,10 +181,13 @@ window.__ModuleLoader__.load({
           { key: 'marketplaceWithheldTax', label: '商城代扣境外流转税（元）', def: '350000' },
           { key: 'cutoffAndFxDiff', label: '跨期与汇率折算差（正调减/负调增）', def: '400000' },
           { key: 'platformFees', label: '平台佣金与履约费（元）', def: '600000' },
-          { key: 'actualPayout', label: '实际银行放款（元，可选）', def: '' },
+          { key: 'actualPayout', label: '平台放款净额（元，可选）', def: '' },
         ],
         advancedFields: [
           { key: 'subsidies', label: '平台出资补贴/赔付（元）', def: '0' },
+          { key: 'refundReversal', label: '客户退款冲回（元）', def: '0' },
+          { key: 'platformFeeRebate', label: '平台手续费返还（元）', def: '0' },
+          { key: 'subsidyReversal', label: '平台补贴/赔付冲回（元）', def: '0' },
           { key: 'subsidiesIncludedInGross', label: '上述毛额已含本次填写的补贴', type: 'bool', def: true },
           { key: 'withheldTaxIncludedInGross', label: '上述毛额已含本次填写的境外代扣税', type: 'bool', def: true },
           { key: 'selfRemitTaxNet', label: '非代扣待自申报税净额（元）', def: '0' },
@@ -556,7 +572,16 @@ window.__ModuleLoader__.load({
       .ftx-gap { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border: 1px solid var(--ftx-gap-bd); color: var(--ftx-gap-fg); background: var(--ftx-gap-bg); padding: 9px 12px; border-radius: 3px; min-width: 0; max-width: 100%; }
       .ftx-gap .att { display: inline-grid; place-items: center; color: #fff7e9; background: var(--ftx-orange); border-radius: 3px; width: 19px; height: 19px; font: 700 13px var(--ftx-mono); flex-shrink: 0; }
       .ftx-gap b { font: 700 21px/1 var(--ftx-mono); color: var(--ftx-orange); letter-spacing: -0.6px; }
-      .ftx-risk-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) max-content; align-items: start; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--ftx-line); font-size: 12.8px; }
+      .ftx-risk-list { display: flex; flex-direction: column; min-width: 0; max-height: 205px; overflow-y: auto; }
+      .ftx-risk-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) fit-content(38%); align-items: start; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--ftx-line); font-size: 12.8px; }
+      .ftx-risk-row > div, .ftx-hist-text, .ftx-gap > span { min-width: 0; overflow-wrap: anywhere; }
+      .ftx-risk-action { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+      .ftx-risk-action > * { max-width: 100%; }
+      .ftx-hist-entity { min-width: 0; max-width: 100%; height: auto !important; white-space: normal; overflow-wrap: anywhere; }
+      @container ftx (max-width: 440px) {
+        .ftx-risk-row { grid-template-columns: 30px minmax(0, 1fr); }
+        .ftx-risk-action { grid-column: 2; flex-direction: row; align-items: center; flex-wrap: wrap; }
+      }
       .ftx-sev { display: inline-grid; place-items: center; font: 600 10.5px var(--ftx-mono); height: 20px; border-radius: 2px; width: 28px; background: var(--ftx-th-bg); color: var(--ftx-mut); border: 1px solid var(--ftx-line); margin-top: 1px; }
       .ftx-sev.p0 { background: var(--ftx-orange); border-color: var(--ftx-orange); color: #fff8e9; }
       .ftx-sev.p1 { background: var(--ftx-gap-bg); border-color: var(--ftx-gap-bd); color: var(--ftx-gap-fg); }
@@ -587,21 +612,49 @@ window.__ModuleLoader__.load({
       .ftx-adp.wallet.used i { background: var(--ftx-ok); border-color: var(--ftx-ok); }
       .ftx-chain { background: var(--ftx-chassis); border: 1px solid var(--ftx-chassis-bd); border-radius: 6px; padding: 14px 18px; display: flex; flex-direction: column; gap: 11px; }
       .ftx-chain-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); gap: 10px; }
-      .ftx-chain-cell { background: var(--ftx-surface); border: 1px solid var(--ftx-line); border-radius: 4px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+      .ftx-chain-cell { background: var(--ftx-surface); border: 1px solid var(--ftx-line); border-radius: 4px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
       .ftx-chain-cell.ok { border-color: var(--ftx-ok); }
       .ftx-chain-cell.danger { border-color: var(--ftx-orange); background: var(--ftx-gap-bg); }
-      .ftx-chain-bar { height: 9px; border-radius: 2px; overflow: hidden; display: flex; background: var(--ftx-line); gap: 1px; }
       .ftx-tag-w { display: inline-block; font: 600 10px var(--ftx-mono); padding: 1px 5px; border-radius: 2px; background: var(--ftx-th-bg); color: var(--ftx-ok); border: 1px solid var(--ftx-line); margin-left: 5px; vertical-align: middle; }
     `
 
-    function ensureStyles() {
+    function retainStyles() {
       if (typeof document === 'undefined') return
-      const prev = document.getElementById('dsh-fintax-style-v7')
-      if (prev) prev.remove()
-      const el = document.createElement('style')
-      el.id = 'dsh-fintax-style-v7'
-      el.textContent = FTX_CSS
-      document.head.appendChild(el)
+      const id = 'dsh-fintax-styles'
+      let el = document.getElementById(id)
+      if (!el) {
+        el = document.createElement('style')
+        el.id = id
+        el.textContent = FTX_CSS
+        document.head.appendChild(el)
+      }
+      el.dataset.ftxUsers = String(Number(el.dataset.ftxUsers || 0) + 1)
+      return () => {
+        const remaining = Number(el.dataset.ftxUsers) - 1
+        if (remaining <= 0) el.remove()
+        else el.dataset.ftxUsers = String(remaining)
+      }
+    }
+
+    function useLatestRequest() {
+      const state = useRef({ version: 0, controller: null })
+      const invalidate = useCallback(() => {
+        state.current.version++
+        state.current.controller?.abort()
+        state.current.controller = null
+      }, [])
+      useEffect(() => invalidate, [invalidate])
+      const start = useCallback(() => {
+        invalidate()
+        const version = state.current.version
+        const controller = new AbortController()
+        state.current.controller = controller
+        return {
+          signal: controller.signal,
+          isCurrent: () => state.current.version === version,
+        }
+      }, [invalidate])
+      return [start, invalidate]
     }
 
     const API_BASE = (() => {
@@ -609,8 +662,11 @@ window.__ModuleLoader__.load({
     })()
 
     async function callApi(path, options = {}) {
-      const { timeout = 25000, ...rest } = options
+      const { timeout = 25000, signal, ...rest } = options
       const ctrl = new AbortController()
+      const abort = () => ctrl.abort()
+      signal?.throwIfAborted()
+      signal?.addEventListener('abort', abort, { once: true })
       const timer = setTimeout(() => ctrl.abort(), timeout)
       try {
         const res = await fetch(`${API_BASE}${path}`, {
@@ -621,7 +677,7 @@ window.__ModuleLoader__.load({
         })
         const txt = await res.text()
         let json = {}
-        try { json = txt ? JSON.parse(txt) : {} } catch { json = { error: txt.slice(0, 200) } }
+        try { json = txt ? JSON.parse(txt) : {} } catch { throw new Error(`服务响应格式无效（HTTP ${res.status}）`) }
         if (!res.ok) {
           const apiErr = new Error(json?.error || `HTTP ${res.status}`)
           apiErr.status = res.status
@@ -631,20 +687,67 @@ window.__ModuleLoader__.load({
         return json
       } finally {
         clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
       }
     }
 
-    function fileToBase64(file) {
+    function fileToBase64(file, signal) {
       return new Promise((resolve, reject) => {
+        signal.throwIfAborted()
         const reader = new FileReader()
+        const abort = () => reader.abort()
+        signal.addEventListener('abort', abort, { once: true })
+        reader.onloadend = () => signal.removeEventListener('abort', abort)
         reader.onload = () => {
           const raw = String(reader.result || '')
           const idx = raw.indexOf(',')
           resolve(idx >= 0 ? raw.slice(idx + 1) : raw)
         }
-        reader.onerror = () => reject(new Error(`读取文件失败：${file.name}`))
+        reader.onabort = () => reject(signal.reason || new Error('读取已取消'))
+        reader.onerror = () => reject(new Error('读取账单文件失败'))
         reader.readAsDataURL(file)
       })
+    }
+
+    function numericFxRates(draft) {
+      const rates = {}
+      for (const [currency, value] of Object.entries(draft)) {
+        const raw = String(value).trim()
+        const amount = Number(raw)
+        if (raw && Number.isFinite(amount) && amount > 0) rates[currency] = raw
+      }
+      return rates
+    }
+
+    function money(value) {
+      return value == null ? '待核' : `¥${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+    }
+
+    function CoverageDetails({ coverage }) {
+      const index = (value) => Number.isSafeInteger(value) && value > 0
+      const lines = []
+      for (const file of coverage?.files || []) {
+        if (file.status === 'parsed' || !index(file.fileIndex)) continue
+        const diagnostics = file.diagnostics?.length ? file.diagnostics : [{ code: file.code }]
+        for (const detail of diagnostics) {
+          const location = [
+            `第 ${file.fileIndex} 份账单`,
+            index(detail.entryIndex) && `ZIP 条目 ${detail.entryIndex}`,
+            index(detail.sheetIndex) && `工作表 ${detail.sheetIndex}`,
+          ].filter(Boolean).join(' / ')
+          const candidates = (detail.candidates || []).filter((name) => ADAPTERS.includes(name) || WALLET_ADAPTERS.includes(name))
+          const rows = (detail.candidateRows || []).map((row) => typeof row === 'number' ? row : row?.row).filter(index)
+          const label = DIAGNOSTIC_LABELS.get(detail.code) || '解析待核'
+          lines.push(`${location} · ${label}${candidates.length ? `（${candidates.join('、')}）` : ''}${rows.length ? ` · 待核行 ${rows.join('、')}` : ''}`)
+        }
+      }
+      if (!lines.length) return null
+      return h('details', { className: 'ftx-hist-text', style: { fontSize: 12, color: 'var(--ftx-gap-fg)' } },
+        h('summary', { style: { cursor: 'pointer' } }, `查看 ${lines.length} 项解析待核位置`),
+        h('ul', { style: { margin: '5px 0', paddingInlineStart: 20, maxHeight: 160, overflowY: 'auto' } },
+          ...lines.map((line, i) => h('li', { key: i }, line)),
+        ),
+      )
     }
 
     function downloadText(content, filename, mime) {
@@ -672,21 +775,38 @@ window.__ModuleLoader__.load({
     function StatementRadarTab({ t, status, refreshStatus, onCopyText, copiedKey, onJumpToCalc }) {
       const [dragging, setDragging] = useState(false)
       const [platform, setPlatform] = useState('auto')
-      const [uploadedFiles, setUploadedFiles] = useState([])
-      const [demoMode, setDemoMode] = useState('')
-      const [fxMap, setFxMap] = useState({ USD: '7.18', EUR: '7.82', GBP: '9.15', AUD: '4.72', MYR: '1.62', SGD: '5.36' })
-      const fxDirtyRef = useRef(false)
+      const [source, setSource] = useState(null)
+      const [reportPayload, setReportPayload] = useState(null)
+      const [fxMap, setFxMap] = useState({})
+      const fxEditVersion = useRef(0)
+      const fxSaveLock = useRef(false)
+      const [startFxSave] = useLatestRequest()
+      const [fxSaving, setFxSaving] = useState(false)
       const [fxSaveMsg, setFxSaveMsg] = useState('')
       const [declaredCny, setDeclaredCny] = useState('')
       const [busy, setBusy] = useState(false)
       const [err, setErr] = useState('')
+      const [failedCoverage, setFailedCoverage] = useState(null)
       const [data, setData] = useState(null)
+      const [startParse, invalidateParse] = useLatestRequest()
+      const [startReportExport, invalidateReportExport] = useLatestRequest()
+      const [reportExporting, setReportExporting] = useState(false)
+      const [inputsChanged, setInputsChanged] = useState(false)
       const [sevFilter, setSevFilter] = useState('ALL')
       const [platFilter, setPlatFilter] = useState('ALL')
-      const [showAllAnoms, setShowAllAnoms] = useState(false)
+      const [anomalyPage, setAnomalyPage] = useState(0)
       const [showFxBar, setShowFxBar] = useState(false)
       const [showHistList, setShowHistList] = useState(false)
       const [histState, setHistState] = useState({ history: [], rolling12m: null })
+      const [historyRevision, setHistoryRevision] = useState(0)
+      const [historyPage, setHistoryPage] = useState(0)
+      const [historyError, setHistoryError] = useState('')
+      const [startHistory, invalidateHistory] = useLatestRequest()
+      const [startHistoryDelete] = useLatestRequest()
+      const [startTrend, invalidateTrend] = useLatestRequest()
+      const [startSnapshot, invalidateSnapshot] = useLatestRequest()
+      const [snapSaving, setSnapSaving] = useState(false)
+      const snapshotSaveLock = useRef(false)
       const [activeEntityFilter, setActiveEntityFilter] = useState('')
       const [snapEntity, setSnapEntity] = useState('')
       const [snapStore, setSnapStore] = useState('')
@@ -699,159 +819,220 @@ window.__ModuleLoader__.load({
       const [snapMsg, setSnapMsg] = useState('')
       const [includeAppendix, setIncludeAppendix] = useState(false)
 
-      // 载入本机持久化的自定义汇率预设（仅在用户尚未手动修改草稿时同步，防止晚到响应覆盖编辑）
       useEffect(() => {
-        if (fxDirtyRef.current) return
-        const saved = status?.customFxRates
-        if (saved && typeof saved === 'object' && Object.keys(saved).length > 0) {
-          setFxMap((prev) => {
-            const next = { ...prev }
-            for (const [k, v] of Object.entries(saved)) next[k] = String(v)
-            return next
-          })
-        }
+        if (fxEditVersion.current !== 0 || !status?.customFxRates) return
+        setFxMap(numericFxRates(status.customFxRates))
       }, [status?.customFxRates])
 
-      const refreshHistory = useCallback(async (entityOverride) => {
-        try {
-          const ent = entityOverride !== undefined ? entityOverride : activeEntityFilter
-          const qs = ent ? `?entity=${encodeURIComponent(ent)}` : ''
-          const res = await callApi(`/history${qs}`)
-          setHistState({ history: res.history || [], rolling12m: res.rolling12m || null })
-        } catch { /* ignore */ }
-      }, [activeEntityFilter])
+      const refreshHistory = useCallback(() => {
+        invalidateHistory()
+        setHistoryRevision((previous) => previous + 1)
+      }, [invalidateHistory])
+      useEffect(() => {
+        const request = startHistory()
+        const qs = activeEntityFilter ? `?entity=${encodeURIComponent(activeEntityFilter)}` : ''
+        setHistoryError('')
+        callApi(`/history${qs}`, { signal: request.signal }).then((res) => {
+          if (!request.isCurrent()) return
+          setHistState({ entity: activeEntityFilter, history: res.history || [], rolling12m: res.rolling12m || null })
+        }).catch((e) => {
+          if (request.isCurrent()) setHistoryError(`读取归档失败：${e.message}`)
+        })
+      }, [activeEntityFilter, historyRevision, startHistory])
 
-      useEffect(() => { refreshHistory() }, [refreshHistory])
+      const selectEntity = (entity) => {
+        invalidateHistory()
+        invalidateTrend()
+        setActiveEntityFilter(entity)
+        setHistoryPage(0)
+      }
 
-      const runParse = useCallback(async ({ files, demo, fxOverrides, declaredOverride, platOverride, appendixOverride }) => {
+      const markInputsChanged = () => {
+        invalidateParse()
+        invalidateReportExport()
+        invalidateSnapshot()
+        setReportExporting(false)
+        setSnapSaving(false)
+        setBusy(false)
+        setInputsChanged(Boolean(source || data))
+        setSnapConflict(null)
+        setSnapMsg('')
+      }
+
+      const beginParse = () => {
+        invalidateReportExport()
+        setReportExporting(false)
+        invalidateSnapshot()
+        setSnapSaving(false)
+        setData(null)
+        setReportPayload(null)
         setBusy(true)
         setErr('')
+        setFailedCoverage(null)
         setSnapMsg('')
         setSnapConflict(null)
-        try {
-          const useFx = fxOverrides || fxMap
-          // 先注入内置参考汇率兜底，再用用户配置覆盖，避免首次解析新币种因缺汇率需点两次按钮
-          const numericFx = { ...DEFAULT_FX }
-          for (const [k, v] of Object.entries(useFx)) {
-            const n = Number(v)
-            if (Number.isFinite(n) && n > 0) numericFx[k] = n
-          }
-          const declRaw = declaredOverride !== undefined ? declaredOverride : declaredCny
-          const declNum = declRaw !== '' && Number.isFinite(Number(declRaw)) ? Number(declRaw) : undefined
-          const payload = {
-            platform: platOverride || platform,
-            fxRates: numericFx,
-            declaredVatSalesCny: declNum,
-            includeResourceAppendix: appendixOverride !== undefined ? appendixOverride : includeAppendix,
-          }
-          if (demo) payload.demo = demo
-          else payload.files = files
+        setInputsChanged(false)
+        return startParse()
+      }
 
-          const res = await callApi('/parse', { method: 'POST', body: JSON.stringify(payload), timeout: 45000 })
+      const runParse = async (batch, options = {}) => {
+        const { request = beginParse(), declared = declaredCny, isNew = false, confirmFx = false } = options
+        try {
+          const fxRates = numericFxRates(batch.demo ? { ...DEMO_FX, ...fxMap } : fxMap)
+          const declNum = declared !== '' && Number.isFinite(Number(declared)) ? Number(declared) : undefined
+          const payload = {
+            platform,
+            fxRates,
+            fxConfirmed: !batch.demo && confirmFx,
+            declaredVatSalesCny: declNum,
+            ...(batch.demo ? { demo: batch.demo } : { files: batch.files }),
+          }
+          const res = await callApi('/parse', {
+            method: 'POST', body: JSON.stringify({ ...payload, reportFormat: 'data' }),
+            timeout: 45000, signal: request.signal,
+          })
+          if (!request.isCurrent()) return
           setData(res)
+          setReportPayload(payload)
           setSevFilter('ALL')
           setPlatFilter('ALL')
-          setShowAllAnoms(false)
-          const firstPeriod = (res.summaries || []).find((s) => /^\d{4}-\d{2}/.test(s.period))?.period?.slice(0, 7) || new Date().toISOString().slice(0, 7)
-          setSnapMonth(firstPeriod)
-          const plats = [...new Set((res.summaries || []).map((s) => s.platform))]
-          const salesPlats = [...new Set((res.summaries || []).filter((s) => s.role !== 'settlement_wallet').map((s) => s.platform))]
+          setAnomalyPage(0)
+          if (!isNew) return
+          const summaries = res.summaries || []
+          const plats = [...new Set(summaries.map((s) => s.platform))]
+          const sales = summaries.filter((s) => s.role !== 'settlement_wallet')
+          const salesPlats = [...new Set(sales.map((s) => s.platform))]
+          const periods = new Set((sales.length ? sales : summaries).map((s) => s.period))
+          const period = periods.values().next().value
+          const firstPeriod = periods.size === 1 && /^\d{4}-(?:0[1-9]|1[0-2])$/.test(period) ? period : ''
+          setSnapMonth(res.archiveMonth || firstPeriod)
           setSnapStore((salesPlats.length ? salesPlats : plats).join('+'))
-          setSnapLabel(`${firstPeriod} ${plats.join('+')} 月结核对`)
+          setSnapLabel(`${firstPeriod} ${plats.join('+')} 月结核对`.trim())
           setSnapZeroSales(false)
-          const nextFx = { ...useFx }
-          for (const s of res.summaries || []) {
-            if (s.currency && s.currency !== 'RMB' && s.currency !== 'CNY' && s.currency !== 'UNKNOWN' && !nextFx[s.currency]) {
-              nextFx[s.currency] = String(DEFAULT_FX[s.currency] || 7.0)
-            }
-          }
-          setFxMap(nextFx)
         } catch (e) {
-          setErr(e.message || '解析失败')
+          if (request.isCurrent()) {
+            if (isNew) setSource(null)
+            setErr(e.message || '解析失败')
+            setFailedCoverage(e.data?.coverage || null)
+          }
         } finally {
-          setBusy(false)
-        }
-      }, [fxMap, declaredCny, platform, includeAppendix])
-
-      const handleSaveFxRates = async () => {
-        setFxSaveMsg('')
-        try {
-          const clean = {}
-          for (const [k, v] of Object.entries(fxMap)) {
-            const n = Number(v)
-            if (Number.isFinite(n) && n > 0) clean[k] = n
-          }
-          const res = await callApi('/settings', { method: 'POST', body: JSON.stringify({ customFxRates: clean }) })
-          fxDirtyRef.current = false
-          if (typeof refreshStatus === 'function') refreshStatus(res)
-          setFxSaveMsg('默认汇率已保存 ✓')
-          if (data) await runParse({ files: uploadedFiles, demo: demoMode, fxOverrides: fxMap })
-        } catch (e) {
-          setFxSaveMsg(`保存失败：${e.message}`)
+          if (request.isCurrent()) setBusy(false)
         }
       }
 
-      const handleResetFxRates = async () => {
+      const handlePersistFxRates = async (reset) => {
+        if (fxSaveLock.current) return
+        const request = startFxSave()
+        const draftVersion = ++fxEditVersion.current
+        fxSaveLock.current = true
+        setFxSaving(true)
         setFxSaveMsg('')
         try {
-          const res = await callApi('/settings', { method: 'POST', body: JSON.stringify({ customFxRates: null }) })
-          const baseFx = { USD: '7.18', EUR: '7.82', GBP: '9.15', AUD: '4.72', MYR: '1.62', SGD: '5.36' }
-          fxDirtyRef.current = false
-          setFxMap(baseFx)
-          if (typeof refreshStatus === 'function') refreshStatus(res)
-          setFxSaveMsg('已恢复内置参考汇率')
-          if (data) await runParse({ files: uploadedFiles, demo: demoMode, fxOverrides: baseFx })
+          const res = await callApi('/settings', {
+            method: 'POST', signal: request.signal,
+            body: JSON.stringify({ customFxRates: reset ? null : numericFxRates(fxMap) }),
+          })
+          if (!request.isCurrent()) return
+          refreshStatus(res)
+          if (fxEditVersion.current !== draftVersion) {
+            setFxSaveMsg('已更新预设，保留较新的未保存输入')
+            return
+          }
+          if (reset) {
+            markInputsChanged()
+            setFxMap({})
+          }
+          setFxSaveMsg(reset ? '已清除保存的汇率' : '汇率预设已保存 ✓')
         } catch (e) {
-          setFxSaveMsg(`重置失败：${e.message}`)
+          if (request.isCurrent()) setFxSaveMsg(`保存失败：${e.message}`)
+        } finally {
+          fxSaveLock.current = false
+          if (request.isCurrent()) setFxSaving(false)
         }
       }
 
       const handleExportTrendReport = async () => {
+        const request = startTrend()
         try {
           const qs = activeEntityFilter ? `?entity=${encodeURIComponent(activeEntityFilter)}` : ''
-          const res = await callApi(`/history/report${qs}`)
-          if (res?.reportHtml) {
+          const res = await callApi(`/history/report${qs}`, { signal: request.signal })
+          if (request.isCurrent() && res?.reportHtml) {
             downloadText(res.reportHtml, '跨境财税12个月滚动风控趋势月报.html', 'text/html;charset=utf-8')
           }
         } catch (e) {
-          setErr(`导出趋势月报失败：${e.message}`)
+          if (request.isCurrent()) setErr(`导出趋势月报失败：${e.message}`)
         }
       }
 
       const handleFiles = async (fileList) => {
         const arr = Array.from(fileList || [])
         if (!arr.length) return
-        setBusy(true)
-        setErr('')
+        const request = beginParse()
+        setSource(null)
+        if (arr.length > MAX_UPLOAD_FILES || arr.reduce((sum, file) => sum + file.size, 0) > MAX_UPLOAD_BYTES) {
+          setErr(`本次选择 ${arr.length} 份账单，超过单批 24 份或 20 MiB 上限。尚未读取任何文件，请分批选择。`)
+          setBusy(false)
+          return
+        }
         try {
           const encoded = []
-          for (const f of arr.slice(0, 24)) encoded.push({ name: f.name, dataBase64: await fileToBase64(f) })
-          setUploadedFiles(encoded)
-          setDemoMode('')
-          await runParse({ files: encoded, demo: '' })
+          for (const f of arr) encoded.push({ name: f.name, dataBase64: await fileToBase64(f, request.signal) })
+          if (!request.isCurrent()) return
+          const batch = { files: encoded }
+          setSource(batch)
+          await runParse(batch, { request, isNew: true })
         } catch (e) {
-          setErr(e.message)
-          setBusy(false)
+          if (request.isCurrent()) {
+            setErr(e.message)
+            setBusy(false)
+          }
         }
       }
 
       const handleDemo = async (modeKey) => {
-        setUploadedFiles([])
-        setDemoMode(modeKey)
+        const batch = { demo: modeKey }
+        setSource(batch)
         const presetDeclared = modeKey === 'v7' ? '330000' : '580000'
         setDeclaredCny(presetDeclared)
-        await runParse({ files: [], demo: modeKey, declaredOverride: presetDeclared })
+        await runParse(batch, { declared: presetDeclared, isNew: true })
       }
 
-      const handleSaveSnapshot = async (conflictMode = 'check') => {
-        if (!data?.consolidated?.ready) return
+      const handleExportReport = async (format) => {
+        if (!canExport || reportExporting) return
+        const request = startReportExport()
+        const fields = { html: 'reportHtml', csv: 'anomaliesCsv', md: 'reportMd' }
+        const names = { html: '跨境月结核对单.html', csv: '财务待核派活清单.csv', md: '跨境月结核对单.md' }
+        const mime = { html: 'text/html', csv: 'text/csv', md: 'text/markdown' }
+        setReportExporting(true)
+        try {
+          const res = await callApi('/parse', {
+            method: 'POST', timeout: 45000, signal: request.signal,
+            body: JSON.stringify({ ...reportPayload, reportFormat: format, includeResourceAppendix: includeAppendix }),
+          })
+          if (!request.isCurrent()) return
+          const content = res?.[fields[format]]
+          if (typeof content !== 'string') throw new Error('服务未返回导出内容')
+          downloadText(content, names[format], `${mime[format]};charset=utf-8`)
+        } catch (e) {
+          if (request.isCurrent()) setErr(`导出失败：${e.message}`)
+        } finally {
+          if (request.isCurrent()) setReportExporting(false)
+        }
+      }
+
+      const handleSaveSnapshot = async (conflictMode = 'check', target = null) => {
+        if (!canArchive || snapshotSaveLock.current) return
+        const request = startSnapshot()
+        snapshotSaveLock.current = true
+        setSnapSaving(true)
         setSnapMsg('')
         try {
-          const tv = data.consolidated.totals
           const plats = [...new Set((data.summaries || []).map((s) => s.platform))]
           const res = await callApi('/history', {
             method: 'POST',
+            signal: request.signal,
             body: JSON.stringify({
+              archiveToken: data.archiveToken,
               month: snapMonth,
               entityName: snapEntity.trim() || '待认领',
               storeScope: snapStore.trim() || plats.join('+'),
@@ -859,78 +1040,98 @@ window.__ModuleLoader__.load({
               citAssessedMode: snapCitMode,
               zeroSalesConfirmed: snapZeroSales,
               conflictMode,
+              ...(target ? { targetId: target.id, expectedRevision: target.revision } : {}),
               filterEntity: activeEntityFilter,
               label: snapLabel,
-              platforms: plats,
-              sheetCount: data.summaries.length,
-              rowCount: totalRows,
-              grossCny: tv.grossCny,
-              refundCny: tv.refundCny,
-              netSalesCny: tv.netSalesCny,
-              feesCny: tv.feesCny,
-              payoutCny: tv.payoutCny,
-              declaredVatSalesCny: declaredCny || null,
-              p0Count: p0.length,
-              p1Count: p1.length,
-              p2Count: p2.length,
             }),
           })
+          if (!request.isCurrent()) return
           setSnapConflict(null)
-          setHistState({ history: res.history || [], rolling12m: res.rolling12m || null })
+          setData((current) => ({ ...current, archiveToken: undefined }))
+          refreshHistory()
           setSnapMsg(res.deduplicated ? '已覆盖更新原档 ✓' : conflictMode === 'append' ? '已作为补充另存 ✓' : '已归档 ✓')
         } catch (e) {
+          if (!request.isCurrent()) return
           if (e.status === 409 && e.data?.conflict) {
-            setSnapConflict({ existing: e.data.existing, sourceKey: e.data.sourceKey, message: e.message })
-            setSnapMsg('')
+            const candidates = e.data.candidates?.length ? e.data.candidates : [e.data.existing].filter(Boolean)
+            setSnapConflict(candidates.length ? { candidates, targetId: candidates.length === 1 ? candidates[0].id : '' } : null)
+            setSnapMsg(candidates.length ? '' : '原归档已不存在，请重新提交。')
           } else {
             setSnapMsg(`失败：${e.message}`)
           }
+        } finally {
+          snapshotSaveLock.current = false
+          if (request.isCurrent()) setSnapSaving(false)
         }
       }
 
       const handleDeleteSnapshot = async (id) => {
+        const request = startHistoryDelete()
         try {
           const qs = activeEntityFilter ? `?entity=${encodeURIComponent(activeEntityFilter)}` : ''
-          const res = await callApi(`/history/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' })
-          setHistState({ history: res.history || [], rolling12m: res.rolling12m || null })
-        } catch (e) { setErr(e.message) }
+          await callApi(`/history/${encodeURIComponent(id)}${qs}`, { method: 'DELETE', signal: request.signal })
+          if (request.isCurrent()) refreshHistory()
+        } catch (e) {
+          if (request.isCurrent()) setErr(e.message)
+        }
       }
 
-      const allAnoms = (data?.summaries || []).flatMap((s) =>
-        (s.anomalies || []).map((a) => ({ ...a, platform: s.platform, scope: `${s.platform}·${s.site}(${s.currency})` })),
-      )
-      const p0 = allAnoms.filter((a) => a.severity.startsWith('P0'))
-      const p1 = allAnoms.filter((a) => a.severity.startsWith('P1'))
-      const p2 = allAnoms.filter((a) => a.severity.startsWith('P2'))
-      const orderedAnoms = [...p0, ...p1, ...p2]
-      const filteredAnoms = orderedAnoms.filter((a) => {
-        if (sevFilter !== 'ALL' && !a.severity.startsWith(sevFilter)) return false
-        if (platFilter !== 'ALL' && a.platform !== platFilter) return false
-        return true
-      })
-      const visibleAnoms = showAllAnoms ? filteredAnoms : filteredAnoms.slice(0, 12)
-      const anomPlatforms = [...new Set(orderedAnoms.map((a) => a.platform).filter(Boolean))]
+      const { anomalyGroups, anomPlatforms } = useMemo(() => {
+        const anomalyGroups = { P0: [], P1: [], P2: [] }
+        const platforms = new Set()
+        for (const { anomalies, platform, site, currency } of data?.summaries || []) {
+          const scope = `${platform}·${site}(${currency})`
+          for (const anomaly of anomalies || []) {
+            const group = anomalyGroups[anomaly.severity?.slice(0, 2)]
+            if (!group) continue
+            group.push({ anomaly, platform, scope })
+            platforms.add(platform)
+          }
+        }
+        return { anomalyGroups, anomPlatforms: [...platforms] }
+      }, [data])
+      const { P0: p0, P1: p1, P2: p2 } = anomalyGroups
+      const anomalyCount = p0.length + p1.length + p2.length
+      const { count: filteredCount, rows: visibleAnoms } = useMemo(() => {
+        const groups = sevFilter === 'ALL' ? Object.values(anomalyGroups) : [anomalyGroups[sevFilter]]
+        const start = anomalyPage * ANOMALY_PAGE_SIZE
+        const rows = []
+        let count = 0
+        for (const group of groups) {
+          for (const item of group) {
+            if (platFilter !== 'ALL' && item.platform !== platFilter) continue
+            if (count >= start && rows.length < ANOMALY_PAGE_SIZE) rows.push(item)
+            count++
+          }
+        }
+        return { count, rows }
+      }, [anomalyGroups, sevFilter, platFilter, anomalyPage])
+      const onSeverityFilter = (severity) => { setAnomalyPage(0); setSevFilter(severity) }
       const loadedPlats = new Set((data?.summaries || []).map((s) => s.platform))
       const totalRows = (data?.summaries || []).reduce((acc, s) => acc + (s.rawRowCount || 0), 0)
-      const sheetCcys = [...new Set((data?.summaries || []).map((s) => s.currency).filter((c) => c && c !== 'RMB' && c !== 'CNY' && c !== 'UNKNOWN'))]
-      const activeCcys = sheetCcys.length > 0 ? sheetCcys : Object.keys(fxMap)
+      const sheetCcys = [...new Set((data?.summaries || []).map((s) => s.currency).filter((c) => /^[A-Z]{3}$/.test(c) && c !== 'RMB' && c !== 'CNY'))]
+      const activeCcys = data ? sheetCcys : [...new Set(['USD', 'EUR', 'GBP', 'AUD', 'MYR', 'SGD', ...Object.keys(fxMap)])]
 
-      const r12 = histState?.rolling12m
+      const r12 = histState.entity === activeEntityFilter ? histState.rolling12m : null
       const hasHistory = Boolean(r12?.snapshotCount || (histState?.history || []).length)
+      const currentResult = Boolean(data && !busy && !inputsChanged)
+      const hasPartialCoverage = data?.coverage?.complete === false
+      const canExport = Boolean(currentResult && reportPayload && !hasPartialCoverage)
       const consTotals = data?.consolidated?.ready ? data.consolidated.totals : null
+      const canArchive = Boolean(currentResult && consTotals && data.archiveToken && !data.fxConfirmationNeeded && !hasPartialCoverage && snapMonth)
       const fundChain = data?.consolidated?.fundChain || null
-      const isWalletOnly = Boolean(fundChain && !fundChain.hasSalesEvidence)
+      const isWalletOnly = Boolean(data?.summaries?.length && data.summaries.every((item) => item.role === 'settlement_wallet'))
       const gaugeNetCny = r12?.snapshotCount ? r12.totalNetSalesCny : (consTotals?.netSalesCny || 0)
-      const pct75 = r12?.snapshotCount
-        ? (r12.taxYearCliff75mPct !== undefined ? r12.taxYearCliff75mPct : r12.cliff75mPct)
-        : (consTotals ? Math.round((consTotals.netSalesCny / 75_000_000) * 10000) / 100 : 0)
-      const pct5 = r12?.snapshotCount ? r12.threshold5mPct : (consTotals ? Math.round((consTotals.netSalesCny / 5_000_000) * 10000) / 100 : 0)
-      const gaugeAFoot = r12?.snapshotCount && r12.taxYear
+      const thresholdsApplicable = Boolean(activeEntityFilter && r12?.thresholdApplicable === true)
+      const gaugeAFoot = r12?.taxYear
         ? `${r12.taxYear} 年 ${r12.taxYearMonthCount || r12.monthCount} 月 · 4% 情景估算`
         : t.assessedGaugeHelp
-      const gaugeBFoot = r12?.snapshotCount
-        ? `覆盖 ${r12.monthCount}/12 月 · 缺档 ${r12.missingMonthsCount ?? Math.max(0, 12 - r12.monthCount)} 月${r12.zeroSalesMonthsCount > 0 ? ` · 零收入 ${r12.zeroSalesMonthsCount} 月` : ''}`
-        : '连续 12 月/4 季 · 须按应税额复核'
+      const gaugeBFoot = r12 && `覆盖 ${r12.monthCount}/12 月 · 缺档 ${r12.missingMonthsCount ?? Math.max(0, 12 - r12.monthCount)} 月${r12.zeroSalesMonthsCount > 0 ? ` · 零收入 ${r12.zeroSalesMonthsCount} 月` : ''}`
+      const normalizedEntity = (name) => String(name || '待认领').trim().toLowerCase().replace(/\s+/g, ' ')
+      const historyList = activeEntityFilter ? histState.history.filter((entry) => normalizedEntity(entry.entityName) === normalizedEntity(activeEntityFilter)) : histState.history
+      const lastHistoryPage = Math.max(0, Math.ceil(historyList.length / 12) - 1)
+      const visibleHistoryPage = Math.min(historyPage, lastHistoryPage)
+      const currentTarget = snapConflict?.candidates.find((item) => item.id === snapConflict.targetId)
       const declDiag = data?.consolidated?.ready && !isWalletOnly ? data.consolidated.reconcile?.declarationDiagnosis : null
 
       const jumpBridge = () => {
@@ -942,15 +1143,18 @@ window.__ModuleLoader__.load({
         onJumpToCalc('platform_tax_reconcile', {
           reportedGrossRevenue: String(consTotals.grossCny),
           reportedGrossSource: 'statement_reference',
-          refunds: String(consTotals.refundCny),
+          refunds: String(Math.max(consTotals.refundCny, 0)),
+          refundReversal: String(Math.max(-consTotals.refundCny, 0)),
           marketplaceWithheldTax: '0', cutoffAndFxDiff: '0',
-          platformFees: String(consTotals.feesCny),
-          subsidies: String(consTotals.subsidyCny),
+          platformFees: String(Math.max(consTotals.feesCny, 0)),
+          platformFeeRebate: String(Math.max(-consTotals.feesCny, 0)),
+          subsidies: String(Math.max(consTotals.subsidyCny, 0)),
+          subsidyReversal: String(Math.max(-consTotals.subsidyCny, 0)),
           subsidiesIncludedInGross: false,
           withheldTaxIncludedInGross: false,
           selfRemitTaxNet: String(consTotals.selfRemitTaxCny),
           reserveChange: String(consTotals.reserveCny),
-          actualPayout: consTotals.payoutCny > 0 ? String(consTotals.payoutCny) : '',
+          actualPayout: consTotals.payoutEvidenceCount ? String(consTotals.payoutCny) : '',
           declaredVatSales: declaredCny || '',
         })
       }
@@ -964,6 +1168,11 @@ window.__ModuleLoader__.load({
           onDrop: (e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer?.files) },
         },
         err && h('div', { className: 'ftx-gap' }, h('i', { className: 'att' }, '!'), h('span', null, err)),
+        hasPartialCoverage && h('div', { className: 'ftx-gap' }, h('i', { className: 'att' }, '!'), h('span', null, `本批有 ${data.coverage.files.filter((file) => file.status !== 'parsed').length} 份账单未完整解析。请拆分账单或核对表头后重新导入。`)),
+        h(CoverageDetails, { coverage: hasPartialCoverage ? data.coverage : failedCoverage }),
+        source && inputsChanged && h('div', { className: 'ftx-gap' }, h('i', { className: 'att' }, '!'), h('span', null, '口径已修改，请复算后再导出或归档。')),
+        data?.fxConfirmationNeeded && !hasPartialCoverage && h('div', { className: 'ftx-gap' }, h('i', { className: 'att' }, '!'), h('span', null, '汇率待核。请确认本批采用的汇率并复算后归档。')),
+        data?.consolidated?.missingCurrencies?.includes('待确认币种') && h('div', { className: 'ftx-gap' }, h('i', { className: 'att' }, '!'), h('span', null, '账单有未确认的币种。请在来源账单中核对币种后重新导入。')),
         // ── 顶部 Dieter Rams 精密主仪器机身（左 LCD 合并对账 + 右双指针滚年监控表盘）──
         h(
           'section',
@@ -986,8 +1195,8 @@ window.__ModuleLoader__.load({
                 { className: 'ftx-lcd-big' },
                 h('span', { className: 'unit' }, '¥'),
                 isWalletOnly
-                  ? Math.round((fundChain.stage2WalletInboundCny || 0) + (fundChain.stage2OtherInboundCny || 0)).toLocaleString()
-                  : consTotals ? Math.round(consTotals.grossCny).toLocaleString() : '0',
+                  ? (fundChain?.stage2WalletInboundCny == null || fundChain?.stage2OtherInboundCny == null ? '待核' : (fundChain.stage2WalletInboundCny + fundChain.stage2OtherInboundCny).toLocaleString())
+                  : consTotals ? consTotals.grossCny.toLocaleString() : data ? '待核' : '0',
               ),
               !data && h('div', { style: { fontSize: 11.5, color: 'var(--ftx-lcd-ink)', opacity: 0.7, marginTop: 4 } }, '拖入原始账单/.ZIP，或点击下方沙盒按钮 10ms 体验全链路排雷'),
               isWalletOnly && h('div', { style: { fontSize: 11, color: 'var(--ftx-lcd-ink)', opacity: 0.82, marginTop: 4 } }, '已严格排除出销售报送额 · 合并拖入电商账单可激活三段核对'),
@@ -996,11 +1205,11 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'ftx-metrics' },
               isWalletOnly
-                ? h('div', null, h('label', null, '转出企业户(待核回单)'), h('b', null, `¥${Math.round(fundChain.stage3CorporateRepatriatedCny || 0).toLocaleString()}`))
-                : h('div', null, h('label', null, '合并净销售额'), h('b', null, `¥${consTotals ? Math.round(consTotals.netSalesCny).toLocaleString() : '0'}`)),
+                ? h('div', null, h('label', null, '转出企业户(待核回单)'), h('b', { style: { color: 'var(--ftx-orange)' } }, money(fundChain?.stage3CorporateRepatriatedCny)))
+                : h('div', null, h('label', null, '合并净销售额'), h('b', null, money(consTotals?.netSalesCny))),
               isWalletOnly
-                ? h('div', null, h('label', null, '结汇通道手续费'), h('b', null, `¥${Math.round(fundChain.walletFeesCny || 0).toLocaleString()}`))
-                : h('div', null, h('label', null, '平台佣金及履约费'), h('b', null, `¥${consTotals ? Math.round(consTotals.feesCny).toLocaleString() : '0'}`)),
+                ? h('div', null, h('label', null, '结汇通道手续费'), h('b', null, money(fundChain?.walletFeesCny)))
+                : h('div', null, h('label', null, '平台佣金及履约费'), h('b', null, money(consTotals?.feesCny))),
             ),
             h(
               'div',
@@ -1029,28 +1238,31 @@ window.__ModuleLoader__.load({
                 'div',
                 { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
                 h('span', null, r12?.snapshotCount ? `滚动监控（${r12.snapshotCount} 份归档）` : '12 个月滚动监控'),
-                Array.isArray(r12?.entities) && r12.entities.length > 0 &&
+                Boolean(histState.rolling12m?.entities?.length) &&
                   h(
                     'select',
                     {
                       value: activeEntityFilter,
-                      onChange: (e) => { const v = e.target.value; setActiveEntityFilter(v); refreshHistory(v) },
+                      onChange: (e) => selectEntity(e.target.value),
                       className: 'ftx-input',
                       style: { padding: '2px 6px', fontSize: 11 },
                       title: '按公司主体筛选滚动口径，防止多主体串账',
                     },
                     h('option', { value: '' }, `全部主体 (${histState.history.length})`),
-                    ...r12.entities.map((ent) => h('option', { key: ent.name, value: ent.name }, `${ent.name}${ent.unclaimed ? ' [旧档]' : ''} (${ent.count})`)),
+                    ...histState.rolling12m.entities.map((ent) => h('option', { key: ent.name, value: ent.name }, `${ent.name}${ent.unclaimed ? ' [旧档]' : ''} (${ent.count})`)),
                   ),
               ),
               h('span', { style: { fontSize: 11.5, color: 'var(--ftx-mut)', fontWeight: 400 } }, r12?.snapshotCount ? '滚动净额 ' : '当期净额 ', h('b', { className: 'ftx-mono', style: { fontSize: 16, color: 'var(--ftx-ink)' } }, `¥${Math.round(gaugeNetCny).toLocaleString()}`)),
             ),
-            h(
-              'div',
-              { className: 'ftx-meters' },
-              h(DialGauge, { code: 'A', title: t.assessedGauge, pct: pct75, warnPct: 73.3, footNote: gaugeAFoot }),
-              h(DialGauge, { code: 'B', title: '滚动登记参考 · 500万', pct: pct5, warnPct: 80, footNote: gaugeBFoot }),
-            ),
+            thresholdsApplicable
+              ? h(
+                  'div',
+                  { className: 'ftx-meters' },
+                  h(DialGauge, { code: 'A', title: t.assessedGauge, pct: r12.taxYearCliff75mPct ?? r12.cliff75mPct, warnPct: 73.3, footNote: gaugeAFoot }),
+                  h(DialGauge, { code: 'B', title: '滚动登记参考 · 500万', pct: r12.threshold5mPct, warnPct: 80, footNote: gaugeBFoot }),
+                )
+              : h('div', { style: { marginTop: 10, fontSize: 12, color: 'var(--ftx-mut)' } }, activeEntityFilter === '待认领' ? '待认领归档需要先确认主体，再核对阈值。' : '选择已归档的单一主体，查看登记阈值与核定情景。'),
+            historyError && h('div', { className: 'ftx-gap' }, h('span', null, historyError)),
             // 防串账归档身份条（主体 + 店铺 + 账期决定唯一归档身份，显示备注可随意修改）
             h(
               'div',
@@ -1059,10 +1271,10 @@ window.__ModuleLoader__.load({
                 h(
                   'div',
                   { style: { display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' } },
-                  h('input', { type: 'month', value: snapMonth, onChange: (e) => setSnapMonth(e.target.value), className: 'ftx-input', style: { padding: '3px 6px', fontSize: 11.5 } }),
-                  h('input', { type: 'text', value: snapEntity, onChange: (e) => setSnapEntity(e.target.value), placeholder: '公司主体(防串账)', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 115px', minWidth: 96 } }),
-                  h('input', { type: 'text', value: snapStore, onChange: (e) => setSnapStore(e.target.value), placeholder: '店铺/范围', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 92px', minWidth: 82 } }),
-                  h('button', { type: 'button', className: 'ftx-btn-sm on', onClick: () => handleSaveSnapshot('check') }, '归档'),
+                  h('input', { type: 'month', value: snapMonth, disabled: snapSaving, readOnly: Boolean(data.archiveMonth), onChange: (e) => { setSnapMonth(e.target.value); setSnapConflict(null) }, className: 'ftx-input', style: { padding: '3px 6px', fontSize: 11.5 } }),
+                  h('input', { type: 'text', value: snapEntity, disabled: snapSaving, onChange: (e) => { setSnapEntity(e.target.value); setSnapConflict(null) }, placeholder: '公司主体(防串账)', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 115px', minWidth: 0 } }),
+                  h('input', { type: 'text', value: snapStore, disabled: snapSaving, onChange: (e) => { setSnapStore(e.target.value); setSnapConflict(null) }, placeholder: '店铺/范围', className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, flex: '1 1 92px', minWidth: 0 } }),
+                  h('button', { type: 'button', className: 'ftx-btn-sm on', disabled: !canArchive || snapSaving, onClick: () => handleSaveSnapshot('check') }, '归档'),
                 ),
               data && consTotals &&
                 h(
@@ -1091,14 +1303,19 @@ window.__ModuleLoader__.load({
                   'div',
                   { className: 'ftx-gap', style: { padding: '7px 10px', fontSize: 11.5, gap: 6 } },
                   h('i', { className: 'att' }, '!'),
-                  h('span', { style: { flex: '1 1 180px' } }, `已存在同主体同店铺同账期归档（${snapConflict.existing?.entityName} · ${snapConflict.existing?.storeScope} · ${snapConflict.existing?.month}，原净额 ¥${Number(snapConflict.existing?.netSalesCny || 0).toLocaleString()}），请确认：`),
-                  h('button', { type: 'button', className: 'ftx-btn-sm on', onClick: () => handleSaveSnapshot('replace') }, '覆盖替换原档'),
-                  h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleSaveSnapshot('append') }, '作为补充另存'),
+                  h('span', { style: { flex: '1 1 180px' } }, `此主体、店铺和账期已有 ${snapConflict.candidates.length} 份归档。`),
+                  h('select', { className: 'ftx-input', value: snapConflict.targetId, onChange: (e) => { const targetId = e.target.value; setSnapConflict((prev) => ({ ...prev, targetId })) }, 'aria-label': '选择要覆盖的归档' },
+                    h('option', { value: '' }, '选择要覆盖的归档'),
+                    ...snapConflict.candidates.map((item) => h('option', { key: item.id, value: item.id }, `${item.month} · ${item.label || item.storeScope} · ${money(item.netSalesCny)} · ${item.savedAt}`)),
+                  ),
+                  h('button', { type: 'button', className: 'ftx-btn-sm on', disabled: !canArchive || !currentTarget || snapSaving, onClick: () => handleSaveSnapshot('replace', currentTarget) }, '覆盖替换原档'),
+                  h('button', { type: 'button', className: 'ftx-btn-sm', disabled: !canArchive || snapSaving, onClick: () => handleSaveSnapshot('append') }, '作为补充另存'),
                   h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => setSnapConflict(null) }, '取消'),
                 ),
               h(
                 'div',
                 { style: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' } },
+                currentResult && consTotals && !canArchive && !data.fxConfirmationNeeded && !hasPartialCoverage && data.archiveBlockReason && h('span', { className: 'ftx-hist-text', style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, data.archiveBlockReason),
                 snapMsg && h('span', { style: { fontSize: 11.5, fontWeight: 700, color: snapMsg.includes('失败') ? 'var(--ftx-orange)' : 'var(--ftx-ok)' } }, snapMsg),
                 hasHistory &&
                   h(
@@ -1111,7 +1328,7 @@ window.__ModuleLoader__.load({
           ),
         ),
         // 可折叠：汇率与已申报额微调条 + 历史归档清单
-        (showFxBar || (data && !consTotals)) &&
+        (showFxBar || (source && (inputsChanged || (data && (!consTotals || data.fxConfirmationNeeded))))) &&
           h(
             'div',
             { className: 'ftx-panel', style: { padding: '12px 16px', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', gap: 10 } },
@@ -1119,19 +1336,27 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { key: ccy, style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-                h('label', { style: { fontSize: 11, color: 'var(--ftx-mut)', fontWeight: 600 } }, `${ccy} 折人民币汇率`),
-                h('input', { type: 'number', step: '0.01', value: fxMap[ccy] ?? '', onChange: (e) => { fxDirtyRef.current = true; setFxMap({ ...fxMap, [ccy]: e.target.value }) }, className: 'ftx-input', style: { width: 96 } }),
+                h('label', { style: { display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--ftx-mut)', fontWeight: 600 } },
+                  `${ccy} 折人民币汇率`,
+                  h('input', { type: 'number', step: 'any', min: 0, value: fxMap[ccy] ?? (source?.demo ? DEMO_FX[ccy] ?? '' : ''), onChange: (e) => {
+                    const value = e.target.value
+                    fxEditVersion.current++
+                    markInputsChanged()
+                    setFxMap((prev) => ({ ...prev, [ccy]: value }))
+                  }, className: 'ftx-input', style: { width: 110 } }),
+                ),
               ),
             ),
             h(
               'div',
               { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
               h('label', { style: { fontSize: 11, color: 'var(--ftx-mut)', fontWeight: 600 } }, t.declaredLabel),
-              h('input', { type: 'number', placeholder: '如 330000', value: declaredCny, onChange: (e) => setDeclaredCny(e.target.value), className: 'ftx-input', style: { width: 165 } }),
+              h('input', { type: 'number', placeholder: '如 330000', value: declaredCny, onChange: (e) => { markInputsChanged(); setDeclaredCny(e.target.value) }, className: 'ftx-input', style: { width: 165 } }),
             ),
-            h('button', { type: 'button', className: 'ftx-btn-sm on', style: { height: 32, padding: '0 14px' }, disabled: busy || !data, onClick: () => runParse({ files: uploadedFiles, demo: demoMode }) }, t.recalcBtn),
-            h('button', { type: 'button', className: 'ftx-btn-sm', style: { height: 32 }, onClick: handleSaveFxRates }, t.saveFxDefault),
-            h('button', { type: 'button', className: 'ftx-btn-sm', style: { height: 32 }, onClick: handleResetFxRates }, t.resetFxDefault),
+            h('button', { type: 'button', className: 'ftx-btn-sm on', style: { height: 32, padding: '0 14px' }, disabled: busy || !source, onClick: () => runParse(source, { confirmFx: true }) }, !source?.demo && sheetCcys.length > 0 ? '确认汇率并复算' : t.recalcBtn),
+            h('button', { type: 'button', className: 'ftx-btn-sm', style: { height: 32 }, disabled: fxSaving, onClick: () => handlePersistFxRates(false) }, t.saveFxDefault),
+            h('button', { type: 'button', className: 'ftx-btn-sm', style: { height: 32 }, disabled: fxSaving, onClick: () => handlePersistFxRates(true) }, t.resetFxDefault),
+            source?.demo && h('span', { style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, '示例汇率仅用于演示。'),
             fxSaveMsg && h('span', { style: { fontSize: 11.5, fontWeight: 700, color: fxSaveMsg.includes('失败') ? 'var(--ftx-orange)' : 'var(--ftx-ok)', alignSelf: 'center' } }, fxSaveMsg),
           ),
         showHistList && hasHistory &&
@@ -1141,7 +1366,7 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
-              h('strong', { style: { fontSize: 13 } }, `12 个月滚动红线追踪雷达（${r12.windowStart} ~ ${r12.windowEnd} · ${r12.snapshotCount} 份归档快照）`),
+              h('strong', { style: { fontSize: 13 } }, r12?.snapshotCount ? `12 个月滚动归档（${r12.windowStart} ~ ${r12.windowEnd} · ${r12.snapshotCount} 份快照）` : '归档明细'),
               h(
                 'div',
                 { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
@@ -1150,37 +1375,37 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => onJumpToCalc('cbec_assessed_cit', {}, false) }, '按主体试算 4% 核定'),
               ),
             ),
-            ...histState.history.slice(0, 12).map((it) => {
+            ...historyList.slice(visibleHistoryPage * 12, (visibleHistoryPage + 1) * 12).map((it) => {
               const ent = it.entityName || '待认领'
               return h(
                 'div',
                 { key: it.id, style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 12, padding: '5px 8px', borderBottom: '1px solid var(--ftx-line)' } },
                 h(
                   'div',
-                  { style: { display: 'flex', flexWrap: 'wrap', gap: 7, alignItems: 'center' } },
+                  { className: 'ftx-hist-text', style: { display: 'flex', flexWrap: 'wrap', gap: 7, alignItems: 'center' } },
                   h('span', { className: 'ftx-sev' }, it.month.slice(2)),
-                  h('span', { className: `ftx-sev ${ent === '待认领' ? 'p1' : ''}`, style: { width: 'auto', padding: '0 6px' } }, ent),
+                  h('span', { className: `ftx-sev ftx-hist-entity ${ent === '待认领' ? 'p1' : ''}`, style: { width: 'auto', padding: '0 6px' } }, ent),
                   h('strong', null, it.storeScope || it.label),
                   it.label && it.label !== it.storeScope && h('span', { style: { color: 'var(--ftx-mut)' } }, it.label),
                   it.zeroSalesConfirmed && h('span', { style: { fontSize: 10.5, color: 'var(--ftx-mut)' } }, '[零收入]'),
                   h('b', { className: 'ftx-mono' }, `¥${Number(it.netSalesCny || 0).toLocaleString()}`),
                 ),
-                h('button', { type: 'button', className: 'ftx-btn-sm danger', onClick: () => handleDeleteSnapshot(it.id) }, '删除'),
+                h('button', { type: 'button', className: 'ftx-btn-sm danger', style: { flexShrink: 0 }, onClick: () => handleDeleteSnapshot(it.id) }, '删除'),
               )
             }),
+            lastHistoryPage > 0 && h(
+              'div',
+              { style: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 6 } },
+              h('button', { type: 'button', className: 'ftx-btn-sm', disabled: visibleHistoryPage === 0, onClick: () => setHistoryPage(visibleHistoryPage - 1) }, '上一页'),
+              h('span', null, `${visibleHistoryPage + 1} / ${lastHistoryPage + 1} 页`),
+              h('button', { type: 'button', className: 'ftx-btn-sm', disabled: visibleHistoryPage === lastHistoryPage, onClick: () => setHistoryPage(visibleHistoryPage + 1) }, '下一页'),
+            ),
           ),
         // ── v0.8.1 三段资金链路交叉核对仪表卡（仅当存在结汇通道流水时展示）──
         data?.consolidated?.fundChain && (() => {
           const fc = data.consolidated.fundChain
-          const totalIn = (fc.stage2WalletInboundCny || 0) + (fc.stage2OtherInboundCny || 0)
-          const hasDenom = totalIn > 0
-          const pCorp = hasDenom ? Math.min(100, (fc.stage3CorporateRepatriatedCny / totalIn) * 100) : 0
-          const pPers = hasDenom ? Math.min(100 - pCorp, (fc.stage3PersonalWithdrawCny / totalIn) * 100) : 0
-          const spendAndUnv = (fc.directSpendCny || 0) + (fc.stage3UnverifiedWithdrawCny || 0)
-          const pSpend = hasDenom ? Math.min(100 - pCorp - pPers, (spendAndUnv / totalIn) * 100) : 0
-          const retAndFee = (fc.retainedOffshoreCny || 0) + (fc.walletFeesCny || 0) + (fc.frozenOutflowCny || 0)
-          const pRet = hasDenom ? Math.min(100 - pCorp - pPers - pSpend, (retAndFee / totalIn) * 100) : 0
-          const hasGapDanger = fc.hasSalesEvidence && (Math.abs(fc.stage1to2GapCny || 0) > 100 || (fc.byCurrency || []).some((c) => Math.abs((c.stage1to2Gap || 0) * c.fx) > 100))
+          const hasGapDanger = fc.hasSalesStatements && fc.stage1to2Status !== 'matched'
+          const bankPending = fc.stage3VerificationStatus === 'pending_bank_receipt' || fc.bankReceivedCny == null
           return h(
             'section',
             { className: 'ftx-chain' },
@@ -1188,7 +1413,7 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'ftx-bhead' },
               h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' } }, h('h2', null, '三段资金链路交叉核对'), h('span', { style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, '平台放款 → 结汇通道入账 → 钱包转出至企业户[待核银行回单]（结汇流水绝不重复计税）')),
-              h('span', { className: 'ftx-secmeta' }, fc.hasSalesEvidence ? '3-STAGE / PENDING RECEIPT' : 'WALLET ONLY'),
+              h('span', { className: 'ftx-secmeta' }, fc.hasSalesStatements ? '3-STAGE / PENDING RECEIPT' : 'WALLET ONLY'),
             ),
             h(
               'div',
@@ -1197,46 +1422,41 @@ window.__ModuleLoader__.load({
                 'div',
                 { className: 'ftx-chain-cell' },
                 h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '① 销售平台实际放款'),
-                h('b', { className: 'ftx-mono', style: { fontSize: fc.hasSalesEvidence ? 18 : 14, color: fc.hasSalesEvidence ? 'var(--ftx-ink)' : 'var(--ftx-mut)' } }, fc.hasSalesEvidence ? `¥${Math.round(fc.stage1PlatformPayoutCny).toLocaleString()}` : '待导入销售账单'),
-                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, fc.hasSalesEvidence ? `${fc.salesSheetCount} 份销售账单汇总` : '合并拖入电商账单激活比对'),
+                h('b', { className: 'ftx-mono', style: { fontSize: fc.hasSalesStatements ? 18 : 14, color: fc.hasSalesEvidence ? 'var(--ftx-ink)' : 'var(--ftx-mut)' } }, fc.hasSalesStatements ? money(fc.stage1PlatformPayoutCny) : '待导入销售账单'),
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, fc.hasSalesStatements ? `${fc.salesSheetCount} 份销售账单 · ${fc.stage1PayoutEvidenceCount ?? 0} 条放款凭证` : '合并拖入电商账单激活比对'),
               ),
               h(
                 'div',
                 { className: `ftx-chain-cell${hasGapDanger ? ' danger' : ''}` },
                 h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '② 结汇通道平台入账'),
-                h('b', { className: 'ftx-mono', style: { fontSize: 18 } }, `¥${Math.round(fc.stage2WalletInboundCny).toLocaleString()}`),
+                h('b', { className: 'ftx-mono', style: { fontSize: 18 } }, money(fc.stage2WalletInboundCny)),
                 h(
                   'span',
-                  { className: 'ftx-mono', style: { fontSize: 11, color: hasGapDanger ? 'var(--ftx-orange)' : 'var(--ftx-ok)', fontWeight: 700 } },
-                  fc.hasSalesEvidence
-                    ? `一/二段差 ${fc.stage1to2GapCny >= 0 ? '+' : ''}¥${Math.round(fc.stage1to2GapCny).toLocaleString()}${fc.stage2OtherInboundCny > 0 ? ` · 另其他 ¥${Math.round(fc.stage2OtherInboundCny).toLocaleString()}` : ''}`
-                    : `${fc.walletCount} 份结汇流水${fc.stage2OtherInboundCny > 0 ? ` · 其他入账 ¥${Math.round(fc.stage2OtherInboundCny).toLocaleString()}` : ''}`,
+                  { className: 'ftx-mono', style: { fontSize: 11, color: hasGapDanger ? 'var(--ftx-orange)' : 'var(--ftx-mut)', fontWeight: 700 } },
+                  fc.hasSalesStatements
+                    ? `一/二段差 ${money(fc.stage1to2GapCny)}${fc.stage1to2GapCny == null ? ` · 未匹配放款 ${money(fc.stage1UnmatchedPayoutCny)} · 未匹配入账 ${money(fc.stage2UnmatchedInboundCny)}` : ''}`
+                    : `${fc.walletCount} 份结汇流水`,
                 ),
+                fc.stage2OtherInboundCny > 0 && h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, `其他入账 ${money(fc.stage2OtherInboundCny)}`),
               ),
               h(
                 'div',
-                { className: 'ftx-chain-cell ok', title: fc.stage3StatusNote || '钱包显示已向企业账户转出，需财务核对银行入账回单后标为已复核' },
-                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '③ 钱包转出至企业户（待核银行回单）'),
-                h('b', { className: 'ftx-mono', style: { fontSize: 18, color: 'var(--ftx-ok)' } }, `¥${Math.round(fc.stage3CorporateRepatriatedCny).toLocaleString()}`),
-                h('span', { className: 'ftx-mono', style: { fontSize: 11, color: 'var(--ftx-ok)', fontWeight: 700 } }, fc.corporateRepatriationRatePct !== null ? `企业户转出占比 ${fc.corporateRepatriationRatePct}% · 待核回单` : '企业户转出占比 待核'),
+                { className: `ftx-chain-cell${bankPending ? ' danger' : ' ok'}`, title: fc.stage3StatusNote },
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '③ 钱包识别为转出至疑似企业户'),
+                h('b', { className: 'ftx-mono', style: { fontSize: 18, color: bankPending ? 'var(--ftx-orange)' : 'var(--ftx-ok)' } }, money(fc.stage3CorporateRepatriatedCny)),
+                h('span', { className: 'ftx-mono', style: { fontSize: 11, color: bankPending ? 'var(--ftx-orange)' : 'var(--ftx-ink)', fontWeight: 700 } }, bankPending ? '银行实收 待核回单' : `银行实收 ${money(fc.bankReceivedCny)}`),
+                h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, `钱包转出占比 ${fc.corporateRepatriationRatePct == null ? '待核' : `${fc.corporateRepatriationRatePct}%`}`),
               ),
               h(
                 'div',
                 { className: `ftx-chain-cell${fc.stage3PersonalWithdrawCny > 0 || (fc.stage3UnverifiedWithdrawCny || 0) > 0 ? ' danger' : ''}` },
                 h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, '私户 P0 / 待核 / 坐支 P1'),
-                h('b', { className: 'ftx-mono', style: { fontSize: 15, color: fc.stage3PersonalWithdrawCny > 0 ? 'var(--ftx-orange)' : 'var(--ftx-ink)' } }, `¥${Math.round(fc.stage3PersonalWithdrawCny).toLocaleString()} / ¥${Math.round(fc.stage3UnverifiedWithdrawCny || 0).toLocaleString()} / ¥${Math.round(fc.directSpendCny).toLocaleString()}`),
-                h('span', { className: 'ftx-mono', style: { fontSize: 11, color: 'var(--ftx-mut)' } }, `滞留境外 ¥${Math.round(fc.retainedOffshoreCny).toLocaleString()} · 费 ¥${Math.round(fc.walletFeesCny).toLocaleString()}`),
+                h('b', { className: 'ftx-mono', style: { fontSize: 15, color: fc.stage3PersonalWithdrawCny > 0 ? 'var(--ftx-orange)' : 'var(--ftx-ink)' } }, `${money(fc.stage3PersonalWithdrawCny)} / ${money(fc.stage3UnverifiedWithdrawCny)} / ${money(fc.directSpendCny)}`),
+                h('span', { className: 'ftx-mono', style: { fontSize: 11, color: 'var(--ftx-mut)' } }, `手续费 ${money(fc.walletFeesCny)}`),
               ),
             ),
-            hasDenom &&
-              h(
-                'div',
-                { className: 'ftx-chain-bar', title: `转出企业户(待核回单) ${pCorp.toFixed(1)}% / 私户 ${pPers.toFixed(1)}% / 待核与坐支 ${pSpend.toFixed(1)}% / 滞留与费 ${pRet.toFixed(1)}%` },
-                pCorp > 0 && h('div', { style: { width: `${pCorp}%`, background: 'var(--ftx-ok)' } }),
-                pPers > 0 && h('div', { style: { width: `${pPers}%`, background: 'var(--ftx-orange)' } }),
-                pSpend > 0 && h('div', { style: { width: `${pSpend}%`, background: '#d97706' } }),
-                pRet > 0 && h('div', { style: { width: `${pRet}%`, background: 'var(--ftx-mut)', opacity: 0.45 } }),
-              ),
+            h('div', { className: 'ftx-hist-text', style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, `钱包期间净流 ${money(fc.signedNetFlowCny)} · 期初余额 ${money(fc.openingBalanceCny)} · 期末余额 ${money(fc.closingBalanceCny)} · 滞留境外 ${money(fc.retainedOffshoreCny)}`),
+            (fc.matchedCorporateReturnCny > 0 || fc.unmatchedReturnCny > 0) && h('div', { className: 'ftx-hist-text', style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, `企业户毛转出 ${money(fc.grossCorporateWithdrawCny)} · 已匹配企业户退汇 ${money(fc.matchedCorporateReturnCny)} · 待核退汇 ${money(fc.unmatchedReturnCny)}`),
             fc.stage3StatusNote &&
               h('div', { style: { fontSize: 11.5, color: 'var(--ftx-mut)', lineHeight: 1.45 } }, `口径提示：${fc.stage3StatusNote}`),
             fc.byCurrency && fc.byCurrency.length > 0 &&
@@ -1246,10 +1466,10 @@ window.__ModuleLoader__.load({
                 ...fc.byCurrency.map((c) =>
                   h(
                     'span',
-                    { key: c.currency, className: 'ftx-mono', style: { padding: '2px 7px', border: '1px solid var(--ftx-line)', borderRadius: 3, background: 'var(--ftx-surface)' } },
-                    fc.hasSalesEvidence
-                      ? `${c.currency}: 放款 ${c.platformPayout.toLocaleString()} → 入账 ${c.walletInbound.toLocaleString()} (${c.stage1to2Gap >= 0 ? '+' : ''}${c.stage1to2Gap.toLocaleString()}) → 转出企业户(待核回单) ${c.corporateWithdraw.toLocaleString()}`
-                      : `${c.currency}: 入账 ${c.walletInbound.toLocaleString()} → 转出企业户(待核回单) ${c.corporateWithdraw.toLocaleString()}`,
+                    { key: c.currency, className: 'ftx-mono ftx-hist-text', style: { padding: '2px 7px', border: '1px solid var(--ftx-line)', borderRadius: 3, background: 'var(--ftx-surface)' } },
+                    fc.hasSalesStatements
+                      ? `${c.currency} 放款 ${c.platformPayout?.toLocaleString() ?? '待核'} → 入账 ${c.walletInbound?.toLocaleString() ?? '待核'} · 差额 ${c.stage1to2Gap?.toLocaleString() ?? '待核'} → 转出企业户 ${c.corporateWithdraw?.toLocaleString() ?? '待核'}`
+                      : `${c.currency} 入账 ${c.walletInbound?.toLocaleString() ?? '待核'} → 转出企业户 ${c.corporateWithdraw?.toLocaleString() ?? '待核'}`,
                   ),
                 ),
               ),
@@ -1270,7 +1490,7 @@ window.__ModuleLoader__.load({
               h('span', null, data ? `${data.summaries.length} 份账单 · 逐表 BigInt 定点核验` : '支持 8 销售平台 + 3 结汇通道及 .ZIP 直拖'),
               h(
                 'select',
-                { value: platform, onChange: (e) => setPlatform(e.target.value), className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5 } },
+                { value: platform, onChange: (e) => { markInputsChanged(); setPlatform(e.target.value) }, className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5 } },
                 h('option', { value: 'auto' }, t.platformAuto),
                 h('option', { value: 'amazon' }, 'Amazon'), h('option', { value: 'tiktok' }, 'TikTok Shop'),
                 h('option', { value: 'temu' }, 'Temu'), h('option', { value: 'aliexpress' }, '速卖通 AliExpress'),
@@ -1391,54 +1611,62 @@ window.__ModuleLoader__.load({
                 h('b', null, `¥${Number(declDiag.unexplainedSalesGap).toLocaleString(undefined, { maximumFractionDigits: 2 })}`),
                 h('small', { style: { marginLeft: 'auto', fontSize: 11.5, fontWeight: 600 } }, declDiag.nettingTrapDetected ? '高危 · 疑似回款净额报税' : '需核对跨口径差额'),
               ),
-            orderedAnoms.length > 0 &&
+            anomalyCount > 0 &&
               h(
                 'div',
                 { style: { display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' } },
-                h('button', { type: 'button', className: `ftx-btn-sm${sevFilter === 'ALL' ? ' on' : ''}`, onClick: () => setSevFilter('ALL') }, `全部 (${orderedAnoms.length})`),
-                h('button', { type: 'button', className: `ftx-btn-sm${sevFilter === 'P0' ? ' on' : ''}`, onClick: () => setSevFilter('P0') }, `P0 (${p0.length})`),
-                h('button', { type: 'button', className: `ftx-btn-sm${sevFilter === 'P1' ? ' on' : ''}`, onClick: () => setSevFilter('P1') }, `P1 (${p1.length})`),
-                h('button', { type: 'button', className: `ftx-btn-sm${sevFilter === 'P2' ? ' on' : ''}`, onClick: () => setSevFilter('P2') }, `P2 (${p2.length})`),
+                h('button', { type: 'button', className: `ftx-btn-sm${sevFilter === 'ALL' ? ' on' : ''}`, onClick: () => onSeverityFilter('ALL') }, `全部 (${anomalyCount})`),
+                h('button', { type: 'button', className: `ftx-btn-sm${sevFilter === 'P0' ? ' on' : ''}`, onClick: () => onSeverityFilter('P0') }, `P0 (${p0.length})`),
+                h('button', { type: 'button', className: `ftx-btn-sm${sevFilter === 'P1' ? ' on' : ''}`, onClick: () => onSeverityFilter('P1') }, `P1 (${p1.length})`),
+                h('button', { type: 'button', className: `ftx-btn-sm${sevFilter === 'P2' ? ' on' : ''}`, onClick: () => onSeverityFilter('P2') }, `P2 (${p2.length})`),
                 anomPlatforms.length > 1 &&
                   h(
                     'select',
-                    { value: platFilter, onChange: (e) => setPlatFilter(e.target.value), className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, marginLeft: 'auto' } },
+                    { value: platFilter, onChange: (e) => { setAnomalyPage(0); setPlatFilter(e.target.value) }, className: 'ftx-input', style: { padding: '3px 7px', fontSize: 11.5, marginLeft: 'auto' } },
                     h('option', { value: 'ALL' }, '全部平台'),
                     ...anomPlatforms.map((pl) => h('option', { key: pl, value: pl }, pl)),
                   ),
               ),
             !data
               ? h('div', { style: { fontSize: 12.5, color: 'var(--ftx-mut)', padding: '18px 4px', lineHeight: 1.6 } }, '载入账单后自动扫描：全托管混表阻断（P0）、余额坐支海外广告、Shopee 运费倒挂/预提税 WHT、自收境外 VAT 及 PayPal 换汇剥离。')
-              : filteredAnoms.length === 0
-                ? h('div', { style: { fontSize: 12.5, color: 'var(--ftx-ok)', fontWeight: 700, padding: '10px 2px' } }, orderedAnoms.length === 0 ? '✔ 全部明细行扫描完毕，未检出异常交易。' : '当前筛选条件下无匹配异常。')
+              : filteredCount === 0
+                ? h('div', { style: { fontSize: 12.5, color: hasPartialCoverage ? 'var(--ftx-orange)' : 'var(--ftx-mut)', fontWeight: 700, padding: '10px 2px' } }, anomalyCount === 0 ? '已解析明细未检出异常交易。' : '当前筛选条件下无匹配异常。')
                 : h(
                     'div',
-                    { style: { display: 'flex', flexDirection: 'column', maxHeight: 205, overflowY: 'auto' } },
-                    ...visibleAnoms.map((a, idx) => {
+                    { key: `anomalies-${sevFilter}-${platFilter}-${anomalyPage}`, className: 'ftx-risk-list' },
+                    ...visibleAnoms.map(({ anomaly: a, platform: adapter, scope }, idx) => {
                       const sevCode = a.severity.slice(0, 2)
                       const sevCls = sevCode === 'P0' ? 'p0' : sevCode === 'P1' ? 'p1' : ''
-                      const qaPrompt = `我在账单体检中检出 [${a.severity}] ${a.scope} ${a.category}（金额 ${a.amount}）：${a.detail}。请先检索我的 IMA 财税知识库，给出对应的现行政策文号与合规整改步骤。`
+                      const channel = ADAPTERS.includes(adapter) || WALLET_ADAPTERS.includes(adapter) ? adapter : '跨境账单'
+                      const qaPrompt = `请检索我的 IMA 财税知识库，列出 ${channel} 账单「${a.category}」的现行政策文号、应核对的凭证与财务处理步骤。`
+                      const copyKey = `anom-${sevFilter}-${platFilter}-${anomalyPage}-${idx}`
                       return h(
                         'div',
-                        { key: `${a.refId}-${idx}`, className: 'ftx-risk-row', title: a.detail },
+                        { key: idx, className: 'ftx-risk-row', title: a.detail },
                         h('span', { className: `ftx-sev ${sevCls}` }, sevCode),
                         h(
                           'div',
                           { style: { minWidth: 0 } },
-                          h('div', { style: { fontWeight: 600, lineHeight: 1.35 } }, `${a.category} `, h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, `· ${a.scope}`)),
+                          h('div', { style: { fontWeight: 600, lineHeight: 1.35 } }, `${a.category} `, h('span', { style: { fontSize: 11, color: 'var(--ftx-mut)' } }, `· ${scope}`)),
                           h('div', { style: { fontSize: 11.5, color: 'var(--ftx-mut)', marginTop: 2, lineHeight: 1.4 } }, a.detail),
                         ),
                         h(
                           'div',
-                          { style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 } },
+                          { className: 'ftx-risk-action' },
                           h('b', { className: 'ftx-mono', style: { fontSize: 12 } }, a.amount),
-                          h('button', { type: 'button', className: 'ftx-btn-sm', style: { padding: '2px 7px', fontSize: 10.5 }, onClick: () => onCopyText(`anom-${idx}`, qaPrompt) }, copiedKey === `anom-${idx}` ? t.copied : '查 IMA SOP'),
+                          h('button', { type: 'button', className: 'ftx-btn-sm', style: { padding: '2px 7px', fontSize: 10.5 }, onClick: () => onCopyText(copyKey, qaPrompt) }, copiedKey === copyKey ? t.copied : '查 IMA SOP'),
                         ),
                       )
                     }),
-                    filteredAnoms.length > 12 &&
-                      h('button', { type: 'button', className: 'ftx-btn-sm', style: { alignSelf: 'flex-start', marginTop: 8 }, onClick: () => setShowAllAnoms(!showAllAnoms) }, showAllAnoms ? '收起异常列表' : `展开全部 ${filteredAnoms.length} 条异常`),
                   ),
+            filteredCount > ANOMALY_PAGE_SIZE &&
+              h(
+                'div',
+                { style: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 6 } },
+                h('button', { type: 'button', className: 'ftx-btn-sm', disabled: anomalyPage === 0, onClick: () => setAnomalyPage((page) => page - 1) }, '上一页'),
+                h('span', { className: 'ftx-mono', style: { fontSize: 11.5 } }, `${anomalyPage + 1} / ${Math.ceil(filteredCount / ANOMALY_PAGE_SIZE)} 页`),
+                h('button', { type: 'button', className: 'ftx-btn-sm', disabled: (anomalyPage + 1) * ANOMALY_PAGE_SIZE >= filteredCount, onClick: () => setAnomalyPage((page) => page + 1) }, '下一页'),
+              ),
           ),
         ),
         // ── 底部四联精密实体操作键排（对齐 Dieter Rams 样片底栏）──
@@ -1453,9 +1681,9 @@ window.__ModuleLoader__.load({
             h('small', { style: { fontSize: 10.5, color: 'var(--ftx-mut)', fontWeight: 500 } }, '11 通道支持'),
             h('input', { type: 'file', multiple: true, accept: '.csv,.tsv,.txt,.xlsx,.xlsm,.zip', style: { display: 'none' }, onChange: (e) => { handleFiles(e.target.files); e.target.value = '' } }),
           ),
-          h('button', { type: 'button', className: 'ftx-act pri', disabled: isWalletOnly, title: isWalletOnly ? '纯结汇通道未含销售报送额，请合并拖入电商账单' : '', onClick: jumpBridge }, h('span', null, isWalletOnly ? '需合并销售账单方能桥接' : '一键带入四层桥接精算 →')),
-          h('button', { type: 'button', className: 'ftx-act', disabled: !data, onClick: () => data && downloadText(data.reportHtml, '跨境月结核对单.html', 'text/html;charset=utf-8') }, h(Icon, { kind: 'download', size: 16 }), t.exportHtml),
-          h('button', { type: 'button', className: 'ftx-act', disabled: !data?.anomaliesCsv, onClick: () => data?.anomaliesCsv && downloadText(data.anomaliesCsv, '财务待核派活清单.csv', 'text/csv;charset=utf-8') }, h(Icon, { kind: 'download', size: 16 }), t.exportCsv),
+          h('button', { type: 'button', className: 'ftx-act pri', disabled: busy || inputsChanged || isWalletOnly || hasPartialCoverage || Boolean(data && !consTotals), title: isWalletOnly ? '纯结汇通道未含销售报送额，请合并拖入电商账单' : '', onClick: jumpBridge }, h('span', null, isWalletOnly ? '需合并销售账单方能桥接' : '一键带入四层桥接精算 →')),
+          h('button', { type: 'button', className: 'ftx-act', disabled: !canExport || reportExporting, onClick: () => handleExportReport('html') }, h(Icon, { kind: 'download', size: 16 }), t.exportHtml),
+          h('button', { type: 'button', className: 'ftx-act', disabled: !canExport || reportExporting || anomalyCount === 0, onClick: () => handleExportReport('csv') }, h(Icon, { kind: 'download', size: 16 }), t.exportCsv),
         ),
         data &&
           h(
@@ -1467,7 +1695,7 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'ftx-btn-sm on', onClick: () => handleDemo('v8') }, t.runDemoV8),
               h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleDemo('v7') }, t.runDemoV7),
               h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => handleDemo('all') }, t.runDemo),
-              h('button', { type: 'button', className: 'ftx-btn-sm', onClick: () => downloadText(data.reportMd, '跨境月结核对单.md', 'text/markdown;charset=utf-8') }, t.exportMd),
+              h('button', { type: 'button', className: 'ftx-btn-sm', disabled: !canExport || reportExporting, onClick: () => handleExportReport('md') }, t.exportMd),
               hasHistory && h('button', { type: 'button', className: 'ftx-btn-sm', onClick: handleExportTrendReport }, t.exportTrendHtml),
               h(
                 'label',
@@ -1475,11 +1703,7 @@ window.__ModuleLoader__.load({
                 h('input', {
                   type: 'checkbox',
                   checked: includeAppendix,
-                  onChange: (e) => {
-                    const nextVal = e.target.checked
-                    setIncludeAppendix(nextVal)
-                    if (data) runParse({ files: uploadedFiles, demo: demoMode, appendixOverride: nextVal })
-                  },
+                  onChange: (e) => setIncludeAppendix(e.target.checked),
                 }),
                 '导出时附带参考指引附页',
               ),
@@ -1511,17 +1735,28 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [err, setErr] = useState('')
       const [result, setResult] = useState(null)
+      const [startCalculation, invalidateCalculation] = useLatestRequest()
 
       const sc = CALC_SCENARIOS.find((x) => x.code === activeCode) || CALC_SCENARIOS[0]
       const vals = forms[sc.code] || {}
 
+      const resetCalculation = () => {
+        invalidateCalculation()
+        setResult(null)
+        setErr('')
+        setBusy(false)
+      }
+
       const setField = (k, v) => {
+        resetCalculation()
         setForms((prev) => ({ ...prev, [sc.code]: { ...(prev[sc.code] || {}), [k]: v } }))
       }
 
       const runCalc = useCallback(async (targetSc, targetVals) => {
+        const request = startCalculation()
         setBusy(true)
         setErr('')
+        setResult(null)
         try {
           const params = {}
           for (const f of [...(targetSc.fields || []), ...(targetSc.advancedFields || [])]) {
@@ -1532,14 +1767,14 @@ window.__ModuleLoader__.load({
             else if (f.type === 'select' || f.type === 'date') params[f.key] = String(raw)
             else params[f.key] = Number(raw)
           }
-          const res = await callApi('/calc', { method: 'POST', body: JSON.stringify({ scenario: targetSc.code, params }) })
-          setResult(res.result)
+          const res = await callApi('/calc', { method: 'POST', signal: request.signal, body: JSON.stringify({ scenario: targetSc.code, params }) })
+          if (request.isCurrent()) setResult(res.result)
         } catch (e) {
-          setErr(e.message || '试算失败')
+          if (request.isCurrent()) setErr(e.message || '试算失败')
         } finally {
-          setBusy(false)
+          if (request.isCurrent()) setBusy(false)
         }
-      }, [])
+      }, [startCalculation])
 
       useEffect(() => {
         if (!calcSeed?.scenario) return
@@ -1548,14 +1783,16 @@ window.__ModuleLoader__.load({
         const merged = { ...buildInitialValues(targetSc), ...(calcSeed.values || {}) }
         setActiveCode(targetSc.code)
         setForms((prev) => ({ ...prev, [targetSc.code]: merged }))
+        invalidateCalculation()
         setResult(null)
         setErr('')
+        setBusy(false)
         const hasAdvOverride = (targetSc.advancedFields || []).some(
           (f) => calcSeed.values?.[f.key] !== undefined && String(calcSeed.values[f.key]) !== '' && String(calcSeed.values[f.key]) !== '0',
         )
         setShowAdv(hasAdvOverride)
         if (calcSeed.autoRun !== false) runCalc(targetSc, merged)
-      }, [calcSeed, runCalc])
+      }, [calcSeed, runCalc, invalidateCalculation])
 
       const renderFieldControl = (f) => {
         if (f.type === 'confirmation') {
@@ -1611,7 +1848,7 @@ window.__ModuleLoader__.load({
                 const on = item.code === sc.code
                 return h(
                   'button',
-                  { key: item.code, type: 'button', className: `ftx-nav-btn${on ? ' is-active' : ''}`, onClick: () => { setActiveCode(item.code); setResult(null); setErr(''); setShowAdv(false) } },
+                  { key: item.code, type: 'button', className: `ftx-nav-btn${on ? ' is-active' : ''}`, onClick: () => { if (!on) { resetCalculation(); setActiveCode(item.code); setShowAdv(false) } } },
                   h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, isZh ? item.zh : item.en),
                   item.isNew && h('span', { className: 'ftx-sev p0', style: { width: 'auto', padding: '0 5px', height: 17, fontSize: 9.5 } }, 'NEW'),
                 )
@@ -1802,8 +2039,10 @@ window.__ModuleLoader__.load({
       const [status, setStatus] = useState({ loading: true, configured: false, source: 'none', defaultKbId: '', defaultKbName: '', version: '' })
       const [copiedKey, setCopiedKey] = useState('')
       const [calcSeed, setCalcSeed] = useState(null)
+      const [startStatus] = useLatestRequest()
+      const [startCopy] = useLatestRequest()
 
-      useEffect(() => { ensureStyles() }, [])
+      useEffect(retainStyles, [])
 
       const onJumpToCalc = useCallback((scenario, values, autoRun = true) => {
         setCalcSeed({ scenario, values, autoRun, nonce: Date.now() })
@@ -1811,13 +2050,14 @@ window.__ModuleLoader__.load({
       }, [])
 
       const refreshStatus = useCallback(async (direct) => {
+        const request = startStatus()
         try {
-          const data = direct || (await callApi('/status'))
-          setStatus({ loading: false, ...data })
+          const data = direct || (await callApi('/status', { signal: request.signal }))
+          if (request.isCurrent()) setStatus({ loading: false, ...data })
         } catch {
-          setStatus((prev) => ({ ...prev, loading: false }))
+          if (request.isCurrent()) setStatus((prev) => ({ ...prev, loading: false }))
         }
-      }, [])
+      }, [startStatus])
 
       useEffect(() => { refreshStatus() }, [refreshStatus])
 
@@ -1825,11 +2065,14 @@ window.__ModuleLoader__.load({
       useEffect(() => () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current) }, [])
 
       const onCopyText = async (key, text) => {
+        if (!navigator.clipboard?.writeText) return
+        const request = startCopy()
         try {
-          if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text)
+          await navigator.clipboard.writeText(text)
+          if (!request.isCurrent()) return
           if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
           setCopiedKey(key)
-          copyTimerRef.current = setTimeout(() => setCopiedKey(''), 1800)
+          copyTimerRef.current = setTimeout(() => { if (request.isCurrent()) setCopiedKey('') }, 1800)
         } catch { /* ignore */ }
       }
 

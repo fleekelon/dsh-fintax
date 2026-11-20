@@ -7,8 +7,12 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
+import { Worker } from 'node:worker_threads'
 import {
   imaCall,
+  ImaServiceError,
+  readImaTextDownload,
   searchImaKnowledge,
   loadCredentials,
   loadFintaxSettings,
@@ -19,17 +23,16 @@ import {
   CREDENTIALS_HELP,
 } from './lib/ima.js'
 import { calculate, platformTaxReconcile } from './lib/calc.js'
-import { parsePlatformStatement, parseStatementBuffer, fmtAmount, toNumber2 } from './lib/statement.js'
+import { StatementInputError, fmtAmount } from './lib/statement.js'
 import {
   buildConsolidatedReconcile,
   exportDiagnosticReport,
-  renderAnomaliesCsv,
-  renderDiagnosticReportHtml,
-  renderDiagnosticReportMd,
+  normalizeFxMap,
   renderRollingTrendReportHtml,
   serializeSummary,
 } from './lib/report.js'
-import { computeRolling12m, deleteSnapshot, loadHistory, saveSnapshot } from './lib/history.js'
+import { computeRolling12m, deleteSnapshot, HistoryInputError, loadHistory, saveSnapshot } from './lib/history.js'
+import { LocalStoreError } from './lib/local_store.js'
 
 const PKG_DIR = dirname(fileURLToPath(import.meta.url))
 const PKG_VERSION = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version
@@ -47,13 +50,24 @@ async function guarded(fn) {
   try {
     return await fn()
   } catch (err) {
-    return `[错误] ${err.message}`
+    const known = err instanceof StatementInputError || err instanceof ImaServiceError ||
+      err instanceof LocalStoreError || err instanceof PublicRequestError
+    if (err instanceof StatementInputError && err.diagnostics?.length) {
+      return `[错误] ${err.code} ${err.message}\n${JSON.stringify(err.diagnostics)}`
+    }
+    if (['REPORT_ALREADY_EXISTS', 'REPORT_FORMAT_UNSUPPORTED', 'REPORT_WRITE_FAILED'].includes(err?.code)) {
+      return `[错误] ${err.code} ${err.message}`
+    }
+    if (err?.code === 'INVALID_FX_MAP') return '[错误] INVALID_FX_MAP 汇率须为有效的币种映射对象。'
+    return known ? `[错误] ${err.code} ${err.message}` : '[错误] 操作失败，请核对输入参数、文件格式和本机权限。'
   }
 }
 
+const isRejection = (value) => Number.isInteger(value) && value >= 400 && value <= 599
+
 /**
  * 宿主连接准入校验（对齐 DSH connection 服务，防止未授权访问或跨站伪造）：
- * - DSH >= 0.1.7 提供 connection.admit(req) -> { rejection?: number }
+ * - 现代宿主提供 connection.admit(req) -> { peer } | { rejection }
  * - 旧版提供 connection.requestRejection(req) -> number | undefined
  * - 若 connection 服务缺失或异常，默认按 503 拒绝（fail-closed）。
  */
@@ -62,10 +76,13 @@ export function admitRequest(req, connection) {
   try {
     if (typeof connection.admit === 'function') {
       const res = connection.admit(req)
-      return res && typeof res === 'object' ? res.rejection : undefined
+      if (!res || typeof res !== 'object' || Array.isArray(res)) return 503
+      if (Object.hasOwn(res, 'rejection')) return isRejection(res.rejection) ? res.rejection : 503
+      return Object.hasOwn(res, 'peer') && res.peer !== null && typeof res.peer === 'object' ? undefined : 503
     }
     if (typeof connection.requestRejection === 'function') {
-      return connection.requestRejection(req)
+      const rejection = connection.requestRejection(req)
+      return rejection === undefined || isRejection(rejection) ? rejection : 503
     }
     return 503
   } catch {
@@ -73,62 +90,205 @@ export function admitRequest(req, connection) {
   }
 }
 
-/** 读取小体积 JSON 请求体（上限 32 KiB）。 */
+class PublicRequestError extends Error {
+  constructor(statusCode, code, message) {
+    super(message)
+    this.statusCode = statusCode
+    this.code = code
+  }
+}
+
+function bodyTooLarge() {
+  return new PublicRequestError(413, 'REQUEST_TOO_LARGE', '请求体过大，请减少文件数量或拆分上传。')
+}
+
+/** 超限后停止累积，先返回 413，再由 HTTP 响应关闭连接。 */
 function readJsonBody(req, maxBytes = 32_768) {
+  const length = req.headers?.['content-length']
+  if (/^\d+$/.test(length ?? '') && Number(length) > maxBytes) {
+    req.resume()
+    return Promise.reject(bodyTooLarge())
+  }
   return new Promise((resolve, reject) => {
     const chunks = []
     let total = 0
+    let completed = false
+    const fail = (error) => {
+      if (completed) return
+      completed = true
+      chunks.length = 0
+      reject(error)
+    }
     req.on('data', (chunk) => {
-      total += chunk.length
+      if (completed) return
+      total += Buffer.byteLength(chunk)
       if (total > maxBytes) {
-        const err = new Error('请求体过大')
-        err.statusCode = 413
-        reject(err)
-        req.destroy()
+        fail(bodyTooLarge())
         return
       }
-      chunks.push(chunk)
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
     })
-    req.on('end', () => {
+    req.once('end', () => {
+      if (completed) return
       try {
         const raw = Buffer.concat(chunks).toString('utf8').trim()
-        resolve(raw ? JSON.parse(raw) : {})
+        const body = raw ? JSON.parse(raw) : {}
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new SyntaxError()
+        completed = true
+        resolve(body)
       } catch {
-        const err = new Error('请求体不是合法的 JSON')
-        err.statusCode = 400
-        reject(err)
+        fail(new PublicRequestError(400, 'INVALID_JSON_BODY', '请求体须为合法的 JSON 对象。'))
       }
     })
-    req.on('error', reject)
+    const interrupted = () => fail(new PublicRequestError(400, 'REQUEST_INTERRUPTED', '请求读取中断，请重试。'))
+    req.once('aborted', interrupted)
+    req.once('error', interrupted)
+    req.once('close', interrupted)
   })
+}
+
+const UPLOAD_BYTES = 20 * 1024 * 1024
+const MAX_PARSE_WORKERS = 2
+const MAX_ARCHIVE_TOKENS = 64
+const ARCHIVE_TTL_MS = 30 * 60 * 1000
+const FORMATS = new Set(['all', 'data', 'html', 'md', 'csv'])
+const DEMOS = new Set(['all', 'v7', 'v8', 'full', 'wallets', 'amazon', 'tiktok', 'temu', 'aliexpress', 'shopee', 'shopify', 'paypal', 'stripe', 'worldfirst', 'payoneer', 'airwallex'])
+let activeParses = 0
+
+function prepareParseRequest(body) {
+  const reportFormat = body.reportFormat === undefined ? 'all' : body.reportFormat
+  if (!FORMATS.has(reportFormat)) throw new PublicRequestError(400, 'INVALID_REPORT_FORMAT', '报告格式无效。')
+  const platform = String(body.platform ?? 'auto').trim().toLowerCase() || 'auto'
+  if (platform !== 'auto' && (!DEMOS.has(platform) || ['all', 'v7', 'v8', 'full', 'wallets'].includes(platform))) {
+    throw new PublicRequestError(400, 'INVALID_STATEMENT_PLATFORM', '账单通道无效。')
+  }
+  const demo = typeof body.demo === 'string' ? body.demo.trim().toLowerCase().replace(/^demo:/, '') : ''
+  if (body.demo != null && (typeof body.demo !== 'string' || !DEMOS.has(demo) || body.files?.length)) {
+    throw new PublicRequestError(400, 'INVALID_DEMO', '请选择有效的示例，或单独上传账单。')
+  }
+  let files = []
+  if (!demo) {
+    if (!Array.isArray(body.files) || !body.files.length) throw new PublicRequestError(400, 'FILES_REQUIRED', '请上传至少一份账单文件。')
+    if (body.files.length > 24) throw new PublicRequestError(413, 'FILE_COUNT_LIMIT', '单次最多解析 24 份账单文件，请分批上传。')
+    let decodedBytes = 0
+    files = body.files.map((file) => {
+      const name = typeof file?.name === 'string' ? file.name.trim() : ''
+      const dataBase64 = file?.dataBase64
+      if (name.length > 255 || !name || /[/\\:\p{Cc}\p{Cf}]/u.test(name) || !/\.(csv|tsv|txt|xlsx|zip)$/i.test(name)) {
+        throw new PublicRequestError(400, 'INVALID_FILE_NAME', '账单文件名或扩展名无效。')
+      }
+      if (typeof dataBase64 !== 'string' || !dataBase64.length || dataBase64.length % 4 !== 0 ||
+          /[^A-Za-z0-9+/=]/.test(dataBase64) || !/^[^=]+={0,2}$/.test(dataBase64) ||
+          (dataBase64.endsWith('==') && !/[AQgw]==$/.test(dataBase64)) ||
+          (dataBase64.endsWith('=') && !dataBase64.endsWith('==') && !/[AEIMQUYcgkosw048]=$/.test(dataBase64))) {
+        throw new PublicRequestError(400, 'INVALID_FILE_DATA', '账单文件内容编码无效。')
+      }
+      decodedBytes += dataBase64.length / 4 * 3 - (dataBase64.endsWith('==') ? 2 : dataBase64.endsWith('=') ? 1 : 0)
+      if (decodedBytes > UPLOAD_BYTES) throw new PublicRequestError(413, 'FILE_BYTES_LIMIT', '账单文件合计最多 20 MiB，请拆分上传。')
+      return { name, dataBase64 }
+    })
+  }
+  if (body.fxConfirmed !== undefined && typeof body.fxConfirmed !== 'boolean') {
+    throw new PublicRequestError(400, 'INVALID_FX_CONFIRMATION', '汇率确认须为布尔值。')
+  }
+  return {
+    demo, files, platform, reportFormat, includeResourceAppendix: body.includeResourceAppendix === true,
+    options: { fxRateToCny: body.fxRateToCny, fxRates: normalizeFxMap(body.fxRates), declaredVatSalesCny: body.declaredVatSalesCny },
+  }
+}
+
+function parseInWorker(input, res) {
+  if (activeParses >= MAX_PARSE_WORKERS) {
+    throw new PublicRequestError(503, 'PARSE_BUSY', '账单正在处理中，请稍后重试。')
+  }
+  const worker = new Worker(new URL('./lib/parse_worker.js', import.meta.url), {
+    workerData: input,
+    execArgv: [],
+    resourceLimits: { maxOldGenerationSizeMb: 384 },
+  })
+  activeParses++
+  worker.once('exit', () => { activeParses-- })
+  return new Promise((resolve, reject) => {
+    const failed = () => reject(new PublicRequestError(503, 'PARSE_INTERRUPTED', '账单处理超时或中断，请拆分账单后重试。'))
+    const cancel = () => {
+      void worker.terminate()
+      failed()
+    }
+    const timeout = setTimeout(cancel, 30_000)
+    const finish = () => {
+      clearTimeout(timeout)
+      res?.removeListener?.('close', cancel)
+    }
+    res?.once?.('close', cancel)
+    worker.once('message', (value) => { finish(); resolve(value) })
+    worker.once('error', () => { finish(); failed() })
+    worker.once('exit', () => { finish(); failed() })
+  })
+}
+
+function buildArchiveKpis(payload, declaredVatSalesCny) {
+  const c = payload.consolidated
+  const summaries = payload.summaries
+  const counts = { P0: 0, P1: 0, P2: 0 }
+  for (const summary of summaries) {
+    for (const anomaly of summary.anomalies) {
+      const severity = anomaly.severity.slice(0, 2)
+      if (Object.hasOwn(counts, severity)) counts[severity]++
+    }
+  }
+  return {
+    platforms: [...new Set(summaries.map((item) => item.platform))],
+    sheetCount: summaries.length,
+    rowCount: summaries.reduce((total, item) => total + item.rawRowCount, 0),
+    grossCny: c.totals.grossCny,
+    refundCny: c.totals.refundCny,
+    netSalesCny: c.totals.netSalesCny,
+    feesCny: c.totals.feesCny,
+    payoutCny: c.totals.payoutCny,
+    p0Count: counts.P0,
+    p1Count: counts.P1,
+    p2Count: counts.P2,
+    declaredVatSalesCny,
+  }
+}
+
+function getArchiveMonth(summaries = []) {
+  const months = new Set(summaries.map((item) => item.period))
+  const [month] = months
+  return months.size === 1 && /^(?:201[5-9]|20[2-9][0-9])-(?:0[1-9]|1[0-2])$/.test(month) ? month : undefined
 }
 
 /** 创建设置页后端路由处理器（导出以便单元测试直接验证准入与脱敏逻辑）。 */
 export function createFintaxApiHandler({ getConnection }) {
+  const archiveTokens = new Map()
   return async function handleFintaxApi(req, res) {
     const send = (status, payload) => {
+      if (res.destroyed || res.writableEnded) return
       const body = JSON.stringify(payload)
       res.writeHead(status, {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
+        ...(status === 413 ? { connection: 'close' } : {}),
       })
       res.end(body)
     }
 
-    const rejection = admitRequest(req, typeof getConnection === 'function' ? getConnection() : undefined)
+    let rejection = 503
+    try {
+      rejection = admitRequest(req, typeof getConnection === 'function' ? getConnection() : undefined)
+    } catch { /* Host services can be unavailable during initialization. */ }
     if (rejection !== undefined) {
       return send(rejection, {
         error: rejection === 401 ? '未登录或会话无效' : rejection === 503 ? '宿主连接准入服务未就绪' : '拒绝访问',
       })
     }
 
-    const url = new URL(req.url ?? '/', 'http://localhost')
-    const marker = '/api/fintax'
-    const idx = url.pathname.indexOf(marker)
-    const subPath = (idx >= 0 ? url.pathname.slice(idx + marker.length) : url.pathname).replace(/\/+$/, '') || '/'
-    const method = String(req.method ?? 'GET').toUpperCase()
-
     try {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const marker = '/api/fintax'
+      const idx = url.pathname.indexOf(marker)
+      const subPath = (idx >= 0 ? url.pathname.slice(idx + marker.length) : url.pathname).replace(/\/+$/, '') || '/'
+      const method = String(req.method ?? 'GET').toUpperCase()
       if (subPath === '/status' && method === 'GET') {
         return send(200, { ok: true, version: PKG_VERSION, ...getPublicStatus() })
       }
@@ -155,11 +315,7 @@ export function createFintaxApiHandler({ getConnection }) {
         if (body && Object.prototype.hasOwnProperty.call(body, 'defaultKbId')) patch.defaultKbId = body.defaultKbId ?? ''
         if (body && Object.prototype.hasOwnProperty.call(body, 'defaultKbName')) patch.defaultKbName = body.defaultKbName ?? ''
         if (body && Object.prototype.hasOwnProperty.call(body, 'customFxRates')) patch.customFxRates = body.customFxRates
-        try {
-          saveFintaxSettings(patch)
-        } catch (cfgErr) {
-          return send(400, { error: cfgErr?.message || '配置参数校验失败' })
-        }
+        saveFintaxSettings(patch)
         return send(200, { ok: true, ...getPublicStatus() })
       }
 
@@ -196,67 +352,33 @@ export function createFintaxApiHandler({ getConnection }) {
           const result = calculate(scenario, body?.params || {})
           return send(200, { ok: true, result })
         } catch (calcErr) {
-          return send(400, { error: calcErr?.message || '试算参数校验失败' })
+          return send(400, { code: 'INVALID_CALC_INPUT', error: '试算参数校验失败，请核对场景和各项输入。' })
         }
       }
 
       if (subPath === '/parse' && method === 'POST') {
         const body = await readJsonBody(req, 28 * 1024 * 1024)
-        const platform = String(body?.platform ?? 'auto').trim() || 'auto'
-        const t0 = performance.now()
-        let summaries = []
-        try {
-          if (body?.demo && String(body.demo).trim()) {
-            const rawDemo = String(body.demo).trim()
-            const demoKey = /^demo(?::|$)/i.test(rawDemo) ? rawDemo : `demo:${rawDemo}`
-            summaries = parsePlatformStatement(demoKey, platform)
-          } else if (Array.isArray(body?.files) && body.files.length > 0) {
-            if (body.files.length > 24) {
-              return send(400, { error: '单次最多同时解析 24 份账单文件，请分批上传或打包为 .zip' })
-            }
-            for (const f of body.files) {
-              const name = String(f?.name ?? '').trim()
-              const b64 = typeof f?.dataBase64 === 'string' ? f.dataBase64.trim() : ''
-              if (!name || !b64) return send(400, { error: '上传文件缺少文件名或有效数据内容' })
-              const buf = Buffer.from(b64, 'base64')
-              summaries.push(...parseStatementBuffer(buf, name, platform))
-            }
-          } else {
-            return send(400, { error: '请拖入至少一份账单文件，或选择沙盒演示模式（demo: "all"）' })
+        const input = prepareParseRequest(body)
+        const payload = await parseInWorker(input, res)
+        if (payload.error) return send(400, payload)
+        const fxConfirmationNeeded = Boolean(payload.summaries?.some((summary) => summary.currency !== 'CNY') && !body.fxConfirmed)
+        const archiveMonth = getArchiveMonth(payload.summaries)
+        let archiveBlockReason
+        let archiveToken
+        if (input.demo) archiveBlockReason = '示例仅供预览。'
+        else if (!payload.coverage.complete) archiveBlockReason = '请核对未解析账单或工作表后重新导入。'
+        else if (!payload.consolidated.ready || fxConfirmationNeeded) archiveBlockReason = '请核对账单币种并确认所用汇率。'
+        else if (payload.summaries && !archiveMonth) archiveBlockReason = '请按可识别的单一账期分别导入归档。'
+        else if (payload.summaries) {
+          const now = Date.now()
+          for (const [token, entry] of archiveTokens) {
+            if (entry.expiresAt <= now) archiveTokens.delete(token)
           }
-        } catch (parseErr) {
-          return send(400, { error: parseErr?.message || '账单解析失败' })
+          if (archiveTokens.size >= MAX_ARCHIVE_TOKENS) archiveTokens.delete(archiveTokens.keys().next().value)
+          archiveToken = randomUUID()
+          archiveTokens.set(archiveToken, { expiresAt: now + ARCHIVE_TTL_MS, month: archiveMonth, kpis: buildArchiveKpis(payload, input.options.declaredVatSalesCny) })
         }
-
-        const elapsedMs = Math.round((performance.now() - t0) * 10) / 10
-        const hasFxInput =
-          (body?.fxRateToCny !== null && body?.fxRateToCny !== undefined && String(body.fxRateToCny).trim() !== '') ||
-          (body?.fxRates && (typeof body.fxRates === 'object' || String(body.fxRates).trim() !== '')) ||
-          summaries.every((s) => s.currency === 'RMB' || s.currency === 'CNY')
-
-        const consolidated = hasFxInput
-          ? buildConsolidatedReconcile(summaries, {
-              fxRateToCny: body?.fxRateToCny,
-              fxRates: body?.fxRates,
-              declaredVatSalesCny: body?.declaredVatSalesCny,
-            })
-          : null
-
-        const includeResourceAppendix = Boolean(body?.includeResourceAppendix)
-        const reportHtml = renderDiagnosticReportHtml({ summaries, consolidated, version: PKG_VERSION, includeResourceAppendix })
-        const reportMd = renderDiagnosticReportMd({ summaries, consolidated, version: PKG_VERSION, includeResourceAppendix })
-        const anomaliesCsv = renderAnomaliesCsv({ summaries })
-
-        return send(200, {
-          ok: true,
-          version: PKG_VERSION,
-          elapsedMs,
-          summaries: summaries.map(serializeSummary),
-          consolidated,
-          reportHtml,
-          reportMd,
-          anomaliesCsv,
-        })
+        return send(200, { ok: true, version: PKG_VERSION, ...payload, fxConfirmationNeeded, archiveToken, archiveMonth, archiveBlockReason })
       }
 
       if (subPath === '/history' && method === 'GET') {
@@ -275,44 +397,47 @@ export function createFintaxApiHandler({ getConnection }) {
 
       if (subPath === '/history' && method === 'POST') {
         const body = await readJsonBody(req, 65_536)
-        try {
-          const saved = saveSnapshot(body || {})
-          if (saved.conflict) {
-            return send(409, {
-              ok: false,
-              error: `检测到同主体同店铺同账期归档重叠（${saved.existing?.entityName || '待认领'} · ${saved.existing?.storeScope || '-'} · ${saved.existing?.month || ''}），请选择覆盖替换原档或作为补充另存`,
-              ...saved,
-            })
-          }
-          const filterEntity = typeof body?.filterEntity === 'string' ? body.filterEntity.trim() : ''
-          const rolling12m = filterEntity ? computeRolling12m(saved.history, { entityName: filterEntity }) : saved.rolling12m
-          return send(200, { ok: true, ...saved, rolling12m })
-        } catch (histErr) {
-          return send(400, { error: histErr?.message || '保存体检快照失败' })
+        const evidence = archiveTokens.get(body.archiveToken)
+        if (!evidence || evidence.expiresAt <= Date.now()) {
+          return send(400, { code: 'ARCHIVE_EVIDENCE_REQUIRED', error: '请重新核对完整账单并确认所用汇率，再提交归档。' })
         }
+        if (body.month !== evidence.month) {
+          return send(400, { code: 'ARCHIVE_PERIOD_MISMATCH', error: '归档账期须与已核对账单账期一致。' })
+        }
+        const saved = saveSnapshot({ ...body, ...evidence.kpis })
+        if (saved.conflict) {
+          return send(409, {
+            ok: false, code: 'ARCHIVE_CONFLICT',
+            error: '同主体同店铺同账期的归档已存在或已改变，请确认目标快照后重试。',
+            ...saved,
+          })
+        }
+        archiveTokens.delete(body.archiveToken)
+        const filterEntity = typeof body.filterEntity === 'string' ? body.filterEntity.trim() : ''
+        const rolling12m = filterEntity ? computeRolling12m(saved.history, { entityName: filterEntity }) : saved.rolling12m
+        return send(200, { ok: true, ...saved, rolling12m })
       }
 
       if ((subPath === '/history' || subPath.startsWith('/history/')) && method === 'DELETE') {
         const id = subPath.startsWith('/history/')
-          ? decodeURIComponent(subPath.slice('/history/'.length))
+          ? subPath.slice('/history/'.length)
           : (url.searchParams.get('id') ?? '')
         const entityName = (url.searchParams.get('entity') ?? '').trim()
-        try {
-          const resDel = deleteSnapshot(id)
-          const rolling12m = entityName ? computeRolling12m(resDel.history, { entityName }) : resDel.rolling12m
-          return send(200, { ok: true, ...resDel, rolling12m })
-        } catch (delErr) {
-          return send(400, { error: delErr?.message || '删除快照失败' })
-        }
+        const resDel = deleteSnapshot(id)
+        const rolling12m = entityName ? computeRolling12m(resDel.history, { entityName }) : resDel.rolling12m
+        return send(200, { ok: true, ...resDel, rolling12m })
       }
 
-      return send(404, { error: `未知接口：${method} ${subPath}` })
+      return send(404, { code: 'UNKNOWN_ROUTE', error: '接口不存在。' })
     } catch (err) {
-      const code = Number(err?.statusCode)
-      if (code === 400 || code === 413) {
-        return send(code, { error: err?.message || '请求参数无效' })
+      if (err instanceof PublicRequestError) return send(err.statusCode, { code: err.code, error: err.message })
+      if (err instanceof HistoryInputError) return send(400, { code: err.code, error: err.message })
+      if (err?.code === 'INVALID_FX_MAP') return send(400, { code: err.code, error: '汇率须为有效的币种映射对象。' })
+      if (err instanceof LocalStoreError) return send(err.code === 'LOCAL_DATA_BUSY' ? 409 : 500, { code: err.code, error: err.message })
+      if (err instanceof ImaServiceError) {
+        return send(err.code === 'INVALID_SETTINGS' ? 400 : 502, { code: err.code, error: err.message })
       }
-      return send(500, { error: err?.message || '内部错误' })
+      return send(500, { code: 'INTERNAL_ERROR', error: '处理请求失败，请稍后重试。' })
     }
   }
 }
@@ -340,7 +465,7 @@ export function apply(ctx) {
         })
         const list = data.info_list ?? data.knowledge_base_list ?? data.list ?? []
         if (!Array.isArray(list) || list.length === 0) {
-          return `未找到知识库。原始返回：${JSON.stringify(data).slice(0, 2000)}`
+          return '未找到知识库。'
         }
         const lines = list.map((kb) => {
           const id = kb.kb_id ?? kb.id
@@ -379,10 +504,10 @@ export function apply(ctx) {
       return guarded(async () => {
         const kbId = String(args?.knowledge_base_id ?? '').trim() || String(loadFintaxSettings().defaultKbId ?? '').trim()
         if (!kbId) {
-          throw new Error('未指定 knowledge_base_id 且尚未绑定默认知识库（请先调用 ima_list_kbs 获取 ID，或在「设置 → 财税工作台」绑定默认库）')
+          throw new PublicRequestError(400, 'IMA_KB_REQUIRED', '请指定知识库 ID，或在财税工作台绑定默认库。')
         }
         if (!args?.query || !String(args.query).trim()) {
-          throw new Error('query（搜索关键词）不能为空；若想直接浏览目录请改用 ima_browse')
+          throw new PublicRequestError(400, 'IMA_QUERY_REQUIRED', '请填写搜索关键词，或用 ima_browse 浏览目录。')
         }
         if (!loadCredentials()) return CREDENTIALS_HELP
         const data = await searchImaKnowledge({
@@ -436,7 +561,7 @@ export function apply(ctx) {
       return guarded(async () => {
         const kbId = String(args?.knowledge_base_id ?? '').trim() || String(loadFintaxSettings().defaultKbId ?? '').trim()
         if (!kbId) {
-          throw new Error('未指定 knowledge_base_id 且尚未绑定默认知识库（请先调用 ima_list_kbs 获取 ID，或在「设置 → 财税工作台」绑定默认库）')
+          throw new PublicRequestError(400, 'IMA_KB_REQUIRED', '请指定知识库 ID，或在财税工作台绑定默认库。')
         }
         if (!loadCredentials()) return CREDENTIALS_HELP
         const body = { knowledge_base_id: kbId, cursor: args?.cursor ?? '', limit: 50 }
@@ -464,7 +589,7 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'ima_read',
     description:
-      '按 media_id 读取 IMA 知识条目原文（Markdown/纯文本/笔记直接返回正文内容，网页返回访问 URL）。folder_ 开头的文件夹请用 ima_browse 展开。',
+      '按 media_id 读取 IMA 的 Markdown、纯文本或笔记。folder_ 开头的文件夹请用 ima_browse 展开。',
     parameters: {
       media_id: { type: 'string', required: true, description: '知识条目 media_id（来自 ima_browse 或 ima_search 结果中的非文件夹条目）。' },
     },
@@ -473,7 +598,7 @@ export function apply(ctx) {
       return guarded(async () => {
         const mediaId = String(args?.media_id ?? '').trim()
         if (!mediaId) {
-          throw new Error('media_id 不能为空（请先从 ima_browse 或 ima_search 结果中获取）')
+          throw new PublicRequestError(400, 'IMA_MEDIA_REQUIRED', '请从 ima_browse 或 ima_search 结果中获取 media_id。')
         }
         if (mediaId.startsWith('folder_')) {
           return `media_id "${mediaId}" 是文件夹，不能用 ima_read 读取。请调用 ima_browse 并传入 folder_id="${mediaId}" 展开查看该文件夹内的文档。`
@@ -500,42 +625,40 @@ export function apply(ctx) {
               ].filter(Boolean).join('\n')
             }
           } catch {
-            // 失败时回退展示原始 media_info
+            // Preserve the limited metadata projection below when a note cannot be read.
           }
         }
 
         if ((data.media_type === 7 || data.media_type === 13) && data.url_info?.url) {
           try {
-            const res = await fetch(data.url_info.url, {
-              headers: data.url_info.headers ?? {},
-              signal: AbortSignal.timeout(15_000),
-            })
-            if (res.ok) {
-              const text = await res.text()
-              return [
-                `media_id: ${mediaId}（Markdown/文本原文）：`,
-                text.slice(0, 8000),
-                text.length > 8000 ? `\n…（原文共 ${text.length} 字，已截断前 8000 字）` : '',
-                '引用时请注明资料标题与出处，只引用原文中真实出现的政策文号。',
-              ].filter(Boolean).join('\n')
-            }
+            const text = await readImaTextDownload(data.url_info.url)
+            return [
+              `media_id: ${mediaId}（Markdown/文本原文）：`,
+              text.slice(0, 8000),
+              text.length > 8000 ? `\n…（原文共 ${text.length} 字，已截断前 8000 字）` : '',
+              '引用时请注明资料标题与出处，只引用原文中真实出现的政策文号。',
+            ].filter(Boolean).join('\n')
           } catch {
-            // 直拉失败回退展示 url_info
+            // Download failures must never expose server-provided URLs or headers.
           }
         }
 
+        const mediaInfo = {
+          title: typeof data.title === 'string' ? data.title.slice(0, 250) : '',
+          media_type: Number.isSafeInteger(data.media_type) ? data.media_type : null,
+        }
         if ([1, 3, 4, 5].includes(data.media_type)) {
           return [
-            `media_id: ${mediaId} 的文件信息（media_type=${data.media_type}，二进制文档）：`,
-            JSON.stringify(data, null, 2).slice(0, 4000),
+            `media_id: ${mediaId} 的文件信息（二进制文档）：`,
+            JSON.stringify(mediaInfo, null, 2),
             '注意：该条目为 PDF/Word/PPT/Excel 二进制文件，请勿直接用网页抓取工具读取 URL（会产生二进制乱码撑爆上下文）；请优先读取同目录下的 Markdown (.md) 指南文档，或将该文件说明告知用户。',
           ].join('\n')
         }
 
         return [
-          `media_id: ${mediaId} 的原文信息：`,
-          JSON.stringify(data, null, 2).slice(0, 8000),
-          '若返回 url_info.url（网页链接），可用网页抓取工具读取原文；引用时注明标题与出处，不得编造文号。',
+          `media_id: ${mediaId} 的条目信息：`,
+          JSON.stringify(mediaInfo, null, 2),
+          '请在 IMA 内打开条目核对原文。',
         ].join('\n')
       })
     },
@@ -613,7 +736,7 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'fintax_parse_statement',
     description:
-      '本地离线解析跨境电商 8 大销售平台（Amazon、TikTok Shop、Temu、速卖通 AliExpress、Shopee、Shopify、PayPal、Stripe）及 3 大第三方结汇通道（万里汇 WorldFirst、派安盈 Payoneer、空中云汇 Airwallex）原始账单（支持 .csv/.tsv/.txt/.xlsx/.zip 及 UTF-16，也可试用 demo:all / demo:v7 / demo:v8 / demo:wallets / demo:full）。自动执行「平台放款→结汇入账→境内对公收汇」三段资金交叉核对（绝不重复计税）、多币种初筛与 P0/P1/P2 异常雷达，支持导出 HTML/Markdown 诊断书或异常 CSV。',
+      '本地离线解析跨境电商 8 大销售平台（Amazon、TikTok Shop、Temu、速卖通 AliExpress、Shopee、Shopify、PayPal、Stripe）及 3 大第三方结汇通道（万里汇 WorldFirst、派安盈 Payoneer、空中云汇 Airwallex）原始账单（支持 .csv/.tsv/.txt/.xlsx/.zip 及 UTF-16，也可试用 demo:all / demo:v7 / demo:v8 / demo:wallets / demo:full）。自动执行「平台放款→结汇入账→钱包转出至疑似企业户（待补银行回单）」三段资金交叉核对（绝不重复计税）、多币种初筛与 P0/P1/P2 异常雷达，支持导出 HTML/Markdown 诊断书或异常 CSV。',
     parameters: {
       file_path: {
         type: 'string',
@@ -655,34 +778,34 @@ export function apply(ctx) {
             if (p && String(p).trim()) inputPaths.push(String(p).trim())
           }
         }
-        if (!inputPaths.length) throw new Error('file_path（本地账单文件路径）不能为空')
-
-        const summaries = parsePlatformStatement(inputPaths, args?.platform || 'auto')
-        const hasFxInput =
-          (args?.fx_rate_to_cny !== null && args?.fx_rate_to_cny !== undefined && String(args.fx_rate_to_cny).trim() !== '') ||
-          (args?.fx_rates && (typeof args.fx_rates === 'object' || String(args.fx_rates).trim() !== '')) ||
-          summaries.every((s) => s.currency === 'RMB' || s.currency === 'CNY')
-
-        const consolidated = hasFxInput
-          ? buildConsolidatedReconcile(summaries, {
-              fxRateToCny: args?.fx_rate_to_cny,
-              fxRates: args?.fx_rates,
-              declaredVatSalesCny: args?.declared_vat_sales_cny,
-            })
-          : null
+        if (!inputPaths.length) throw new PublicRequestError(400, 'FILES_REQUIRED', '请提供账单文件路径。')
+        const parsed = await parseInWorker({ inputPaths, platform: args?.platform || 'auto' })
+        if (parsed.error) {
+          const detail = parsed.diagnostics?.length ? '\n' + JSON.stringify(parsed.diagnostics) : ''
+          throw new PublicRequestError(400, parsed.code, parsed.error + detail)
+        }
+        const summaries = parsed.localSummaries
+        const consolidated = buildConsolidatedReconcile(summaries, {
+          fxRateToCny: args?.fx_rate_to_cny,
+          fxRates: args?.fx_rates,
+          declaredVatSalesCny: args?.declared_vat_sales_cny,
+        })
 
         const blocks = []
-        for (const s of summaries) {
-          const ccy = s.currency
-          const p0 = s.anomalies.filter((a) => a.severity.startsWith('P0'))
-          const p1 = s.anomalies.filter((a) => a.severity.startsWith('P1'))
-          const p2 = s.anomalies.filter((a) => a.severity.startsWith('P2'))
+        const yuan = (n) => n == null ? '待核' : `¥${n.toFixed(2)}`
+        const amountOrPending = (n) => typeof n === 'bigint' ? fmtAmount(n) : '待核'
+        for (const [index, s] of summaries.entries()) {
+          const publicSummary = serializeSummary({ ...s, fileName: '' })
+          const ccy = publicSummary.currency
+          const p0 = publicSummary.anomalies.filter((a) => a.severity.startsWith('P0'))
+          const p1 = publicSummary.anomalies.filter((a) => a.severity.startsWith('P1'))
+          const p2 = publicSummary.anomalies.filter((a) => a.severity.startsWith('P2'))
 
           const lines = s.role === 'settlement_wallet' && s.walletMetrics
             ? [
-                `【第三方结汇通道资金排雷报告｜${s.platform} · ${s.site} · ${ccy}】`,
-                `· 文件与格式：${s.fileName} — ${s.formatLabel}`,
-                `· 识别期间：${s.period} | 有效明细行数：${s.rawRowCount} 行（口径声明：结汇通道不重复计入销售报送总额）`,
+                `【第三方结汇通道资金排雷报告｜${s.platform} · ${ccy}】`,
+                `· 账单 ${index + 1} · ${publicSummary.formatLabel}`,
+                `· 识别期间：${publicSummary.period} | 有效明细行数：${s.rawRowCount} 行（口径声明：结汇通道不重复计入销售报送总额）`,
                 `── 一、结汇通道资金流向拆解（单位：${ccy}，精确到 0.01）──`,
                 `· ① 电商平台/收单网关回款入账：${fmtAmount(s.walletMetrics.platformInbound)}`,
                 `· ② 非标准平台/其他入账（请核实来源防漏报）：${fmtAmount(s.walletMetrics.otherInbound)}`,
@@ -692,12 +815,12 @@ export function apply(ctx) {
                 `· ⑥ 钱包余额境外坐支（供应商/物流/广告/卡消费，P1 高危）：${fmtAmount(s.walletMetrics.directSpend)}`,
                 `· ⑦ 提现/汇兑/账户手续费：${fmtAmount(s.walletMetrics.walletFees)}`,
                 `· ⑧ 已自动剥离同户换汇/多币种互转：${fmtAmount(s.walletMetrics.internalFxStripped)}（${s.walletMetrics.internalFxCount} 笔，本币净变动 ${fmtAmount(s.walletMetrics.internalFxNet || 0n)}）`,
-                `· ⑨ 当期滞留境外未结汇净额：${fmtAmount(s.walletMetrics.unrepatriatedNet)} | 水平校验：${s.walletMetrics.netVerifiedRows > 0 ? `已核验 ${s.walletMetrics.netVerifiedRows} 行，差额 ${fmtAmount(s.horizontalDiffTotal)} ${ccy}` : '原表无 Net 校验列'}`,
+                `· ⑨ 期间净流：${publicSummary.walletMetrics.signedNetFlow ?? '待核'} ｜ 期初余额：${amountOrPending(s.walletMetrics.openingBalance)} ｜ 期末余额：${amountOrPending(s.walletMetrics.closingBalance)} ｜ 银行实收：待补回单`,
               ]
             : [
-                `【跨境原始账单初筛体检报告｜${s.platform} · ${s.site} · ${ccy}】`,
-                `· 文件与格式：${s.fileName} — ${s.formatLabel}`,
-                `· 识别期间：${s.period} | 有效明细行数：${s.rawRowCount} 行`,
+                `【跨境原始账单初筛体检报告｜${s.platform} · ${ccy}】`,
+                `· 账单 ${index + 1} · ${publicSummary.formatLabel}`,
+                `· 识别期间：${publicSummary.period} | 有效明细行数：${s.rawRowCount} 行`,
                 `── 一、原币报送参考与结算项目（单位：${ccy}，精确到 0.01）──`,
                 `· ① 商品含运费原价总额：${fmtAmount(s.grossSales)}`,
                 `· ② 减：商家承担促销折扣：${fmtAmount(s.sellerDiscount)}`,
@@ -715,10 +838,12 @@ export function apply(ctx) {
                 `· ⑪ 冻结准备金/保证金净变动（+新增冻结 / -释放前期）：${fmtAmount(s.reserveNetChange)}`,
                 `── 二、资金桥接与账单内部勾稽 ──`,
                 `· 行内水平守恒校验：差额 ${fmtAmount(s.horizontalDiffTotal)} ${ccy}（${s.horizontalDiffTotal === 0n ? '✔ 全部明细行水平守恒通过' : '❌ 存在行内不守恒阻断项，见下方异常雷达'}）`,
-                `· 理论应放款净额：${fmtAmount(s.theoreticalPayout)} ${ccy} | 账单内提取实际打款（Payout）：${fmtAmount(s.actualPayout)} ${ccy} | 放款差额（实际 − 理论，正为多放、负为少放）：${fmtAmount(s.statementPayoutDiff)} ${ccy}`,
+                publicSummary.payoutEvidenceCount > 0
+                  ? `· 理论应放款净额：${fmtAmount(s.theoreticalPayout)} ${ccy} | 账单内提取实际打款（Payout）：${fmtAmount(s.actualPayout)} ${ccy} | 放款差额（实际 − 理论，正为多放、负为少放）：${fmtAmount(s.statementPayoutDiff)} ${ccy}`
+                  : `· 理论应放款净额：${fmtAmount(s.theoreticalPayout)} ${ccy} ｜ 实际放款及差额待补凭证。`,
               ]
 
-          if (s.statementPayoutDiff !== 0n && s.horizontalDiffTotal === 0n) {
+          if (publicSummary.payoutEvidenceCount > 0 && s.statementPayoutDiff !== 0n && s.horizontalDiffTotal === 0n) {
             lines.push(
               `  （注：行内水平守恒已通过；放款差额 ${fmtAmount(s.statementPayoutDiff)} ${ccy} 通常源于自然月截取导致的期初/期末待打款留存余额变动或独立结算周期跨月打款。）`,
             )
@@ -746,7 +871,7 @@ export function apply(ctx) {
           } else {
             const ordered = [...p0, ...p1, ...p2]
             for (const a of ordered.slice(0, 18)) {
-              lines.push(`· [${a.severity}] ${a.category}（单号 ${a.refId}，金额 ${a.amount} ${ccy}）：${a.detail}`)
+              lines.push(`· [${a.severity}] ${a.category}（本地定位 ${a.refId}，金额 ${a.amount} ${ccy}）：${a.detail}`)
             }
             if (ordered.length > 18) {
               lines.push(`· …其余 ${ordered.length - 18} 条同类异常已折叠汇总。`)
@@ -766,10 +891,10 @@ export function apply(ctx) {
             const hasSales = summaries.some((s) => s.role !== 'settlement_wallet')
             const cLines = [
               `【多表/多币种合并人民币总对账 & 年终红线核验（共合并 ${summaries.length} 张结算单）】`,
-              ...consolidated.breakdown.map((b) =>
+              ...consolidated.breakdown.map((b, index) =>
                 b.role === 'settlement_wallet'
-                  ? `· 结汇通道 [${b.label}]：平台入账折合 ¥${(b.walletInboundCny || 0).toFixed(2)} ｜ 转出企业户(待核回单)折合 ¥${(b.corporateWithdrawCny || 0).toFixed(2)}（汇率 ${b.fx}，不重复计入销售报送额）`
-                  : `· 分表折算 [${b.label}]：原币报送毛额 ${b.grossOrig} ${b.currency} × 汇率 ${b.fx} = ${b.grossCny.toFixed(2)} 元`,
+                  ? `· 结汇通道 [账单 ${index + 1}]：平台入账折合 ¥${(b.walletInboundCny || 0).toFixed(2)} ｜ 转出企业户(待核回单)折合 ¥${(b.corporateWithdrawCny || 0).toFixed(2)}（汇率 ${b.fx}，不重复计入销售报送额）`
+                  : `· 分表折算 [账单 ${index + 1}]：原币报送毛额 ${b.grossOrig} ${b.currency} × 汇率 ${b.fx} = ${b.grossCny.toFixed(2)} 元`,
               ),
               ...consolidated.reconcile.steps.map((st) => `· ${st}`),
               ...consolidated.reconcile.warnings.map((w) => `⚠ ${w}`),
@@ -779,13 +904,13 @@ export function apply(ctx) {
             ]
             if (consolidated.fundChain) {
               const fc = consolidated.fundChain
-              const s1Txt = fc.hasSalesEvidence ? `¥${fc.stage1PlatformPayoutCny.toFixed(2)}` : '待导入销售账单'
-              const gapTxt = fc.hasSalesEvidence ? `¥${fc.stage1to2GapCny.toFixed(2)}` : '待核对'
+              const s1Txt = yuan(fc.stage1PlatformPayoutCny)
+              const gapTxt = yuan(fc.stage1to2GapCny)
               const rateTxt = fc.corporateRepatriationRatePct !== null ? `${fc.corporateRepatriationRatePct}%` : '待核'
               cLines.push(
                 `── 三段资金链路交叉核对（平台放款 → 结汇通道 → 钱包转出至企业户[待核银行回单]）──`,
                 `· ① 销售平台实际放款：${s1Txt} ｜ ② 结汇通道平台入账：¥${fc.stage2WalletInboundCny.toFixed(2)}${fc.stage2OtherInboundCny > 0 ? `（+其他入账 ¥${fc.stage2OtherInboundCny.toFixed(2)}）` : ''} ｜ 一/二段差额：${gapTxt}`,
-                `· ③ 钱包转出至企业户(待核银行回单)：¥${fc.stage3CorporateRepatriatedCny.toFixed(2)}（企业户转出占比 ${rateTxt}）｜ 私户提现(P0)：¥${fc.stage3PersonalWithdrawCny.toFixed(2)} ｜ 待核提现(P1)：¥${(fc.stage3UnverifiedWithdrawCny || 0).toFixed(2)} ｜ 境外坐支(P1)：¥${fc.directSpendCny.toFixed(2)} ｜ 滞留境外：¥${fc.retainedOffshoreCny.toFixed(2)}`,
+                `· ③ 钱包转出至企业户(待核银行回单)：¥${fc.stage3CorporateRepatriatedCny.toFixed(2)}（企业户转出占比 ${rateTxt}）｜ 私户提现(P0)：¥${fc.stage3PersonalWithdrawCny.toFixed(2)} ｜ 待核提现(P1)：¥${(fc.stage3UnverifiedWithdrawCny || 0).toFixed(2)} ｜ 境外坐支(P1)：¥${fc.directSpendCny.toFixed(2)} ｜ 期末余额：${yuan(fc.closingBalanceCny)} ｜ 银行实收：待补回单`,
                 ...(fc.stage3StatusNote ? [`· 口径提示：${fc.stage3StatusNote}`] : []),
                 ...fc.alerts.map((a) => `· ${a}`),
               )
@@ -804,6 +929,14 @@ export function apply(ctx) {
           }
         }
 
+        if (consolidated.coverageComplete === false) {
+          const diagnostics = summaries.flatMap((summary) => summary.parseDiagnostics ?? [])
+          blocks.push(`【部分账单待核】${JSON.stringify(diagnostics)}`)
+        }
+        if (summaries.length === 1 && !consolidated.ready) {
+          blocks.push('【人民币折算待核】请核对币种及对应汇率。')
+        }
+
         if (args?.export_report_path) {
           const savedPath = exportDiagnosticReport({
             summaries,
@@ -813,7 +946,7 @@ export function apply(ctx) {
             version: PKG_VERSION,
           })
           if (savedPath) {
-            blocks.push(`📄 已生成可打印汇报版《税务初筛体检诊断书》：${savedPath}（可直接用浏览器打开打印 PDF 发给老板或团队审阅）`)
+            blocks.push('已在本机生成核对报告。')
           }
         }
 

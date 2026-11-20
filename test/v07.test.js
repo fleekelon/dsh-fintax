@@ -355,7 +355,7 @@ test('v0.7 PayPal 边界：篡改 Net 触发 P0 阻断 + 冻结准备金 + Pendi
   assert.equal(fmtAmount(s.platformCommission), '52.00') // 40 - 8 + 20 = 52
   assert.equal(fmtAmount(s.reserveNetChange), '150.00')
   assert.equal(fmtAmount(s.uncapturedVoidExcluded), '999.00')
-  assert.ok(s.anomalies.some((a) => a.severity === 'P0-阻断' && a.refId === 'TX-5'))
+  assert.ok(s.anomalies.some((a) => a.severity === 'P0-阻断' && /^待核-\d+$/.test(a.refId)))
   assert.ok(s.anomalies.some((a) => a.severity === 'P1-高危' && a.category.includes('准备金')))
   assert.ok(s.anomalies.some((a) => a.severity === 'P2-关注' && a.category.includes('作废')))
 })
@@ -469,7 +469,9 @@ test('v0.7 异常排雷 CSV：UTF-8 BOM、P0→P1→P2 排序、全量无截断�
   assert.equal(lines.length, 28)
   assert.ok(lines[1].startsWith('P0-阻断'))
   assert.ok(lines[1].includes("'=CMD"))
-  assert.ok(lines[1].includes("'+INJ-1"))
+  assert.ok(lines[1].includes('异常 2'))
+  assert.ok(!lines[1].includes('INJ-1'))
+  assert.ok(lines[1].includes(',-50.00,'))
   assert.ok(!csv.includes('借方科目'))
 
   const dir = mkdtempSync(join(tmpdir(), 'fintax-csv-'))
@@ -496,29 +498,30 @@ test('v0.7 本地脱敏归档：仅存摘要、滚动排除老月份及 7500 万
   try {
     clearHistory()
     // 写入 14 个月前的老记录（应在最新 12 个月窗口外被自动滑出）
-    saveSnapshot({ month: '2025-09', label: '老月份', platforms: ['Amazon'], grossCny: 90_000_000, netSalesCny: 90_000_000 })
-    saveSnapshot({ month: '2026-10', label: '10月多平台', platforms: ['Amazon', 'PayPal'], grossCny: 42_000_000, refundCny: 2_000_000, netSalesCny: 40_000_000, p0Count: 1 })
-    const s3 = saveSnapshot({ month: '2026-11', label: '11月黑五', platforms: ['Shopee', 'AliExpress'], grossCny: 40_000_000, refundCny: 1_000_000, netSalesCny: 39_000_000, p1Count: 2 })
+    saveSnapshot({ entityName: '示例主体', month: '2025-09', label: '老月份', platforms: ['Amazon'], grossCny: 90_000_000, netSalesCny: 90_000_000 })
+    saveSnapshot({ entityName: '示例主体', month: '2026-10', label: '10月多平台', platforms: ['Amazon', 'PayPal'], grossCny: 42_000_000, refundCny: 2_000_000, netSalesCny: 40_000_000, p0Count: 1 })
+    const s3 = saveSnapshot({ entityName: '示例主体', month: '2026-11', label: '11月黑五', platforms: ['Shopee', 'AliExpress'], grossCny: 40_000_000, refundCny: 1_000_000, netSalesCny: 39_000_000, p1Count: 2 })
 
+    const rolling = computeRolling12m(s3.history, { entityName: '示例主体' })
     assert.equal(s3.history.length, 3)
     // 滑动窗口 2025-12 ~ 2026-11 仅统计 2026-10(4000万) + 2026-11(3900万) = 7900万（老月份 2025-09 自动滑出！）
-    assert.equal(s3.rolling12m.windowStart, '2025-12')
-    assert.equal(s3.rolling12m.windowEnd, '2026-11')
-    assert.equal(s3.rolling12m.snapshotCount, 2)
-    assert.equal(s3.rolling12m.totalNetSalesCny, 79_000_000)
-    assert.equal(s3.rolling12m.cliff75mLevel, 'danger')
-    assert.equal(s3.rolling12m.threshold5mLevel, 'danger')
-    assert.match(s3.rolling12m.cliff75mAlert, /4% 假设下的 7,500 万元收入等值.*按主体和纳税年度核验/)
+    assert.equal(rolling.windowStart, '2025-12')
+    assert.equal(rolling.windowEnd, '2026-11')
+    assert.equal(rolling.snapshotCount, 2)
+    assert.equal(rolling.totalNetSalesCny, 79_000_000)
+    assert.equal(rolling.cliff75mLevel, 'danger')
+    assert.equal(rolling.threshold5mLevel, 'danger')
+    assert.match(rolling.cliff75mAlert, /4% 假设下的 7,500 万元收入等值.*按主体和纳税年度核验/)
 
     // 删除 11 月快照后应退回安全区（4000万 < 5500万）
     const afterDel = deleteSnapshot(s3.entry.id)
     assert.equal(afterDel.deleted, true)
     assert.equal(afterDel.rolling12m.totalNetSalesCny, 40_000_000)
-    assert.equal(afterDel.rolling12m.cliff75mLevel, 'safe')
+    assert.equal(computeRolling12m(afterDel.history, { entityName: '示例主体' }).cliff75mLevel, 'safe')
     assert.equal(loadHistory().length, 2)
 
     // 确认 5500 万黄灯阈值
-    const warn = computeRolling12m([{ id: '1', month: '2026-11', netSalesCny: 60_000_000 }])
+    const warn = computeRolling12m([{ id: '1', month: '2026-11', entityName: '示例主体', netSalesCny: 60_000_000 }], { entityName: '示例主体' })
     assert.equal(warn.cliff75mLevel, 'warn')
     assert.match(warn.cliff75mAlert, /4% 假设下 7,500 万元收入等值.*按主体和纳税年度复核/)
   } finally {
@@ -549,7 +552,7 @@ test('v0.7 后端路由端到端：/api/fintax/history CRUD、401拦截、/parse
   }
 
   try {
-    const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+    const okHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ peer: {} }) }) })
     const denyHandler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ rejection: 401 }) }) })
 
     // 未登录禁止访问 history
@@ -568,14 +571,17 @@ test('v0.7 后端路由端到端：/api/fintax/history CRUD、401拦截、/parse
     assert.ok(pRes.json.anomaliesCsv.includes('PayPal'))
 
     // POST /history -> GET /history -> DELETE /history/:id
+    const parsed = await invoke(okHandler, 'POST', '/api/fintax/parse', {
+      reportFormat: 'data', files: [{
+        name: 'sample.csv',
+        dataBase64: Buffer.from('Created,ID,Type,Description,Currency,Amount,Fee,Net\n2026-11-02,txn_a,charge,Sale,CNY,100,0,100').toString('base64'),
+      }],
+    })
+    assert.equal(parsed.status, 200)
     const saved = await invoke(okHandler, 'POST', '/api/fintax/history', {
       month: '2026-11',
-      label: 'v0.7三平台测试归档',
-      platforms: ['PayPal', 'AliExpress', 'Shopee'],
-      grossCny: pRes.json.consolidated.totals.grossCny,
-      netSalesCny: pRes.json.consolidated.totals.netSalesCny,
-      p0Count: 1,
-      p1Count: 6,
+      label: 'v0.7测试归档',
+      archiveToken: parsed.json.archiveToken,
     })
     assert.equal(saved.status, 200)
     assert.equal(saved.json.history.length, 1)
@@ -642,7 +648,7 @@ test('v0.7 AliExpress 篡改放款净额触发 P0 阻断 + 纯 POP 无混表不�
     '2026-11-08,AE-BAD-1,POP自运营,USD,2000.00,160.00,1500.00',
   ].join('\n')
   const [sBad] = parseStatementBuffer(Buffer.from(tampered, 'utf8'), 'AliExpress_Bad.csv')
-  assert.ok(sBad.anomalies.some((a) => a.severity === 'P0-阻断' && a.refId === 'AE-BAD-1'))
+  assert.ok(sBad.anomalies.some((a) => a.severity === 'P0-阻断' && /^待核-\d+$/.test(a.refId)))
 
   const clean = [
     '入账时间,订单号,业务模式,币种,商品金额,平台佣金,放款净额',
@@ -668,7 +674,7 @@ test('v0.7 Shopee 篡改拨款额触发 P0 阻断 + 无运费倒挂健康账单�
     '2026-11-12,TH-BAD,TH,THB,10000.00,500.00,9000.00',
   ].join('\n')
   const [sBad] = parseStatementBuffer(Buffer.from(bad, 'utf8'), 'Shopee_TH_Bad.csv')
-  assert.ok(sBad.anomalies.some((a) => a.severity === 'P0-阻断' && a.refId === 'TH-BAD'))
+  assert.ok(sBad.anomalies.some((a) => a.severity === 'P0-阻断' && /^待核-\d+$/.test(a.refId)))
 })
 
 test('v0.7 新算税引擎边界防御：非法日期/负值/非法税率均严格抛错', () => {
@@ -725,7 +731,7 @@ test('v0.7 归档边界校验：非正销售额拒存 + 不存在快照删除安
   try {
     assert.throws(() => saveSnapshot({ month: '2026-11', grossCny: 0, netSalesCny: 0 }))
     assert.throws(() => deleteSnapshot(''))
-    const d = deleteSnapshot('snap_not_exists')
+    const d = deleteSnapshot('39faeba8-6dd7-432e-aca2-289e1982a061')
     assert.equal(d.deleted, false)
     assert.equal(d.rolling12m.snapshotCount, 0)
   } finally {
@@ -805,7 +811,7 @@ test('v0.7.1 API /status 返回候选版本与 /history?id=xxx 查询参数删�
   const dir = mkdtempSync(join(tmpdir(), 'fintax-status-v7-'))
   const prevDir = process.env.FINTAX_CONFIG_DIR
   process.env.FINTAX_CONFIG_DIR = dir
-  const handler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({}) }) })
+  const handler = createFintaxApiHandler({ getConnection: () => ({ admit: () => ({ peer: {} }) }) })
   const call = async (method, url, body) => {
     const req = Readable.from(body ? [Buffer.from(JSON.stringify(body), 'utf8')] : [])
     req.method = method; req.url = url
@@ -818,8 +824,8 @@ test('v0.7.1 API /status 返回候选版本与 /history?id=xxx 查询参数删�
     assert.equal(st.status, 200)
     const expectedVer = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
     assert.equal(st.json.version, expectedVer)
-    const saved = await call('POST', '/api/fintax/history', { month: '2026-11', grossCny: 500_000, netSalesCny: 480_000 })
-    const del = await call('DELETE', `/api/fintax/history?id=${encodeURIComponent(saved.json.entry.id)}`)
+    const saved = saveSnapshot({ month: '2026-11', grossCny: 500_000, netSalesCny: 480_000 })
+    const del = await call('DELETE', `/api/fintax/history?id=${encodeURIComponent(saved.entry.id)}`)
     assert.equal(del.status, 200)
     assert.equal(del.json.deleted, true)
   } finally {
