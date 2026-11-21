@@ -2,6 +2,16 @@
 
 All notable changes to `dsh-fintax` will be documented in this file.
 
+## [0.8.5] - 2026-11-21
+
+- **IMA V2.4.1 热点短词检索与内置技能口径同步 (`lib/ima.js`, `test/ima.test.js`, `skills/`)**：
+  - 在保留全部存量核心检索短词序零回归前提下，增补 `电池`、`消费税`、`电子烟`、`光伏`、`增值税法`、`官方附件` 等 6 组经实库标题验证的新短词锚点，并扩展 `退运`（`16号`）、`欧盟低值包裹`（`临时关税` / `PID` / `C127` / `C128`）、`T86`（`IEEPA` / `CAPE` / `4811` / `301豁免` / `对等关税`）、`退税率调整`（`2号公告` / `362项` / `退税归零`）与 `美国关税` 识别正则；
+  - 同步更新 `fintax-policy-qa` 与 `fintax-crossborder-check` 技能清单：覆盖 2026 年第 2 号/第 20 号/第 29 号退税率与电池消费税清单、美线 IEEPA/CAPE/Form 4811 证据链与欧盟低值包裹 PID 核验提示（严守商用护城河纪律，不引入任何私域公式或分录）。
+- **开源协作与生态门面刷新 (`.github/ISSUE_TEMPLATE/`, `client.js`, `README.md`, `package.json`, `docs/`)**：
+  - 修复工作台主按钮 `.ftx-act.pri:hover` 被通用 `.ftx-act:hover` 优先级覆盖导致悬停底色发白对比度下降的问题；
+  - 新增 GitHub Issue 脱敏反馈表单（`new-channel-header.yml` 与 `bug-report.yml`），支持连连/PingPong/寻汇等新渠道仅提交脱敏表头与 2 行虚构示例排期适配；
+  - 将 `homepage` 接入互动 3D 官网 <https://fleekelon.github.io/fintax-portal/>，更新 `docs/plugin-index.json` 并重拍 `v0.8.5` 实机 `1440×900` 展示大图。
+
 ## [0.8.4] - 2026-11-20
 
 - **IMA V2.3 知识库检索回退对齐 (`lib/ima.js`, `index.js`, `test/ima.test.js`)**：

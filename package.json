@@ -1,6 +1,6 @@
 {
   "name": "dsh-fintax",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "跨境月结核对单与财税工作台：DSH 侧边栏 0 Token 离线核对 8 大销售平台 + 3 大结汇通道（万里汇/派安盈/空中云汇）平台放款与待核回单、防串账主体归档、10 项确定性算税、纯洁版老板核对单与财务派活 CSV、腾讯 IMA 法规检索。FinTax workbench for DeepSeek Harness.",
   "author": "fleekelon",
   "type": "module",
@@ -34,7 +34,7 @@
     "ima"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/fleekelon/dsh-fintax#readme",
+  "homepage": "https://fleekelon.github.io/fintax-portal/",
   "bugs": {
     "url": "https://github.com/fleekelon/dsh-fintax/issues"
   },

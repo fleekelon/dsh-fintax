@@ -1,0 +1,49 @@
+name: 新平台 / 结汇通道脱敏表头提交
+description: 提交暂未支持的销售平台或结汇通道（如连连国际 LianLian / PingPong / 寻汇 SUNRATE / 欧洲本地站 CSV）的脱敏表头列名与 2 行虚构示例数据
+title: "[Channel] 新增通道表头适配申请："
+labels: ["enhancement", "channel-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈新通道需求！`dsh-fintax` 的账单解析 100% 在本机内存离线运行。
+        **安全红线：请勿粘贴任何真实订单号、店铺主体全称、银行账号、真实金额或客户个人信息（PII）。**
+  - type: input
+    id: channel_name
+    attributes:
+      label: 平台 / 结汇通道名称与导出入口
+      description: 例如：连连国际（LianLian Global）- 账户明细 CSV / PingPong - 提现与入账流水 XLSX / Amazon.de 日期范围报告
+      placeholder: 请填写通道名称、站点、文件编码及导出路径
+    validations:
+      required: true
+  - type: dropdown
+    id: file_format
+    attributes:
+      label: 原始文件格式
+      options:
+        - CSV (UTF-8)
+        - CSV (GBK / ANSI)
+        - TSV (UTF-16LE / UTF-16BE)
+        - XLSX (单工作表 / 多工作表，请注明 Sheet 名)
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized_sample
+    attributes:
+      label: 脱敏后的表头列名 + 2 行虚构示例数据
+      description: 仅保留表头和 2 行手工改写过的假数据（含正数收入/负向手续费/退款/提现/换汇等典型交易类型即可），可用 `...` 或 `TEST-001` 脱敏。
+      render: csv
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 需要特别注意的口径说明（可选）
+      description: 例如哪几行属于「余额换汇」、哪列代表「实际入账金额/币种/收款方户名」、是否有英文与中文双版本表头。
+  - type: checkboxes
+    id: privacy_confirm
+    attributes:
+      label: 脱敏确认
+      options:
+        - label: 我确认以上内容仅包含表头与虚构示例数字，已彻底清除所有真实主体、账号与业务订单信息。
+          required: true

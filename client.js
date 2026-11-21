@@ -591,7 +591,7 @@ window.__ModuleLoader__.load({
       .ftx-act:hover:not(:disabled) { background: var(--ftx-btn-hover); transform: translateY(-0.5px); }
       .ftx-act:disabled { opacity: 0.5; cursor: not-allowed; }
       .ftx-act.pri { background: var(--ftx-btn-pri-bg); color: var(--ftx-btn-pri-fg); border-color: var(--ftx-btn-pri-bg); }
-      .ftx-act.pri:hover:not(:disabled) { filter: brightness(1.08); }
+      .ftx-act.pri:hover:not(:disabled) { background: var(--ftx-btn-pri-bg); filter: brightness(1.12); }
       .ftx-act.drop { border-style: dashed; background: var(--ftx-paper); }
       .ftx-act.drop.is-drag { border-color: var(--ftx-orange); background: var(--ftx-gap-bg); }
       .ftx-btn-sm { padding: 5px 10px; border-radius: 3px; border: 1px solid var(--ftx-chassis-bd); background: var(--ftx-btn-bg); color: var(--ftx-ink); font-size: 11.8px; font-weight: 600; cursor: pointer; transition: all 0.14s; }

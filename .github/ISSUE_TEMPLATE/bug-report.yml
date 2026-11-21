@@ -1,0 +1,42 @@
+name: 算税口径 / 账单误报 Bug 反馈
+description: 报告账单解析误报、差额桥接异常、算税结果边界问题或 DSH 侧边栏界面显示问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交问题前请先对真实账单金额与公司名做脱敏处理，切勿直接上传原始营业账单。
+  - type: input
+    id: version
+    attributes:
+      label: dsh-fintax 与 DSH 版本
+      description: 可在工作台左下角/页眉查看，例如 dsh-fintax 0.8.5 / DSH Desktop 0.2.x / Windows 11
+      placeholder: dsh-fintax 0.8.5 / DSH Desktop ...
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: 所属功能模块
+      options:
+        - Tab 1 · 账单离线排雷与三段资金链
+        - Tab 2 · 10 大确定性算税场景
+        - Tab 3 · IMA 知识库连接与检索
+        - HTML / CSV 导出或归档防串账
+        - DSH 侧边栏 UI / 窄屏排版
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤与脱敏输入参数
+      description: 请说明拖入的通道类型（或 demo:v8 等沙盒）、勾选参数及报错文案（遇到未知格式时可直接贴出工具返回的脱敏表头）。
+    validations:
+      required: true
+  - type: textarea
+    id: expected_vs_actual
+    attributes:
+      label: 预期结果 vs 实际结果
+    validations:
+      required: true

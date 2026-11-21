@@ -192,3 +192,22 @@ test('IMA：V2.3 新增专题短词回退覆盖 T86、欧盟处理费、全托�
     assert.deepEqual(res.info_list, [item(expectedTerm)])
   }
 })
+
+test('IMA：V2.4.1 新增专题短词回退覆盖电池消费税、362项退税归零、IEEPA/CAPE、欧盟3欧/PID、16号退运与实施条例39条', async (t) => {
+  const cases = [
+    ['2026年第20号公告电池消费税从2%提到4%怎么算', ['电池', '消费税']],
+    ['2026年第2号公告362项税号出口退税归零怎么自查', ['退税率调整']],
+    ['美线IEEPA对等关税通过CBP CAPE和Form 4811退税怎么操作', ['T86']],
+    ['欧盟低值包裹3欧临时关税和PID C127强报怎么计项', ['欧盟低值包裹']],
+    ['2026年第16号公告滞销货复运进境怎么免进口税', ['退运']],
+    ['增值税法实施条例第39条出口业务怎么适用', ['增值税法']],
+  ]
+  for (const [query, expectedTerms] of cases) {
+    mockSearch(t, ({ query: sent }) => result(expectedTerms.includes(sent) ? [item(sent)] : []))
+    const res = await searchImaKnowledge(request(query), opts)
+    for (const term of expectedTerms) {
+      assert.ok(res.fallback?.queries?.includes(term), `expected ${term} in ${JSON.stringify(res.fallback?.queries)} for "${query}"`)
+    }
+    assert.ok(res.info_list.length >= 1)
+  }
+})

@@ -1,9 +1,11 @@
-# dsh-fintax — 财税工作台 (v0.8.4)
+# dsh-fintax — 财税工作台 (v0.8.5)
 
 [![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
 [![CI](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml/badge.svg)](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![DSH Plugin](https://img.shields.io/badge/DSH-plugin-4fc3f7)](https://github.com/topics/dsh-plugin)
+
+**交互式 3D 官网与实景演示**：<https://fleekelon.github.io/fintax-portal/>
 
 <img src="https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg" width="80" alt="dsh-fintax icon">
 
@@ -31,9 +33,9 @@
   10. **增值税价税分离（`vat`）**。
 - **政策引证问答 & 监管代码决策树**：只读检索你 IMA 知识库里的政策原文与 SOP，回答附真实来源与文号。
 
-## 侧栏模拟截图（v0.8.1）
+## 侧栏实机截图（v0.8.5）
 
-以下截图来自侧栏模拟环境。
+以下截图采集自 `v0.8.5` 本地实机测试环境（`1440×900`）。
 
 1. **DSH 侧边栏独立财税工作台（Braun 精密仪表风格）— 11 通道离线排雷、三段资金链交叉核对、12 个月双指针红线雷达与趋势月报**：
 
@@ -94,6 +96,11 @@ dsh plugin --profile <你的profile> add github:fleekelon/dsh-fintax
 | `fintax-policy-qa` | 政策引证问答（新旧文件优先级 + 降级路径） |
 | `fintax-crossborder-check` | 跨境电商全链路合规自查报告（对齐 2026 现行法规） |
 | `fintax-mode-select` | 海关监管代码与出口模式决策树 |
+
+## 问题反馈与新渠道适配
+
+- **提交新平台/结汇通道脱敏表头**（例如连连国际 LianLian、PingPong、寻汇 SUNRATE 或欧洲本地站报表）：请前往 [GitHub Issue 表单](https://github.com/fleekelon/dsh-fintax/issues/new/choose) 选择 **「新平台 / 结汇通道脱敏表头提交」**，仅提供表头列名与 2 行虚构示例数据即可排期适配，切勿粘贴真实订单或账户隐私。
+- **报告算税边界或账单误报**：同样可通过上述表单选择 **「算税口径 / 账单误报 Bug 反馈」** 提交脱敏复现步骤。
 
 ## 免责声明
 
