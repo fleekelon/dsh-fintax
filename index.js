@@ -22,7 +22,7 @@ import {
   getPublicStatus,
   CREDENTIALS_HELP,
 } from './lib/ima.js'
-import { calculate, platformTaxReconcile } from './lib/calc.js'
+import { CalcInputError, calculate, platformTaxReconcile } from './lib/calc.js'
 import { StatementInputError, fmtAmount } from './lib/statement.js'
 import {
   buildConsolidatedReconcile,
@@ -51,7 +51,7 @@ async function guarded(fn) {
     return await fn()
   } catch (err) {
     const known = err instanceof StatementInputError || err instanceof ImaServiceError ||
-      err instanceof LocalStoreError || err instanceof PublicRequestError
+      err instanceof LocalStoreError || err instanceof PublicRequestError || err instanceof CalcInputError
     if (err instanceof StatementInputError && err.diagnostics?.length) {
       return `[错误] ${err.code} ${err.message}\n${JSON.stringify(err.diagnostics)}`
     }
@@ -347,12 +347,15 @@ export function createFintaxApiHandler({ getConnection }) {
       if (subPath === '/calc' && method === 'POST') {
         const body = await readJsonBody(req, 65_536)
         const scenario = String(body?.scenario ?? '').trim()
-        if (!scenario) return send(400, { error: 'scenario（算税场景标识）不能为空' })
+        if (!scenario) return send(400, { code: 'INVALID_CALC_INPUT', error: 'scenario（算税场景标识）不能为空' })
         try {
           const result = calculate(scenario, body?.params || {})
           return send(200, { ok: true, result })
         } catch (calcErr) {
-          return send(400, { code: 'INVALID_CALC_INPUT', error: '试算参数校验失败，请核对场景和各项输入。' })
+          const safeMsg = calcErr instanceof CalcInputError && typeof calcErr.message === 'string' && calcErr.message.trim()
+            ? calcErr.message.replace(/[\r\n]+/g, ' ').trim().slice(0, 200)
+            : '试算参数校验失败，请核对场景和各项输入。'
+          return send(400, { code: 'INVALID_CALC_INPUT', error: safeMsg })
         }
       }
 
@@ -585,13 +588,38 @@ export function apply(ctx) {
     },
   })
 
-  // ── 工具 4：读取知识条目原文 ────────────────────────────────
+  // ── 工具 4：读取知识条目原文（支持 offset 分段续读） ─────────
+  const IMA_READ_CHUNK_CHARS = 8000
+  const formatImaReadChunk = (mediaId, kindLabel, text, offset) => {
+    const total = text.length
+    if (offset >= total && total > 0) {
+      return [
+        `media_id: ${mediaId}（${kindLabel}）：offset=${offset} 已超出原文长度（共 ${total} 字）。`,
+        `分页状态：hasMore: false | nextOffset: null | totalChars: ${total}`,
+      ].join('\n')
+    }
+    const slice = text.slice(offset, offset + IMA_READ_CHUNK_CHARS)
+    const nextOffset = offset + slice.length
+    const hasMore = nextOffset < total
+    return [
+      `media_id: ${mediaId}（${kindLabel}${offset > 0 ? `，自第 ${offset} 字续读` : ''}）：`,
+      slice,
+      hasMore
+        ? `\n…（原文共 ${total} 字，已展示 ${offset}–${nextOffset} 字；hasMore: true, nextOffset: ${nextOffset}，传 offset=${nextOffset} 可继续分段读取）`
+        : offset > 0
+          ? `\n（已读至全文末尾，共 ${total} 字；hasMore: false, nextOffset: null）`
+          : '',
+      '引用时请注明资料标题与出处，只引用原文中真实出现的政策文号。',
+    ].filter(Boolean).join('\n')
+  }
+
   ctx.tools.register({
     name: 'ima_read',
     description:
-      '按 media_id 读取 IMA 的 Markdown、纯文本或笔记。folder_ 开头的文件夹请用 ima_browse 展开。',
+      '按 media_id 读取 IMA 的 Markdown、纯文本或笔记；超 8000 字长文支持传 offset 分段续读（返回 hasMore / nextOffset）。folder_ 开头的文件夹请用 ima_browse 展开。',
     parameters: {
       media_id: { type: 'string', required: true, description: '知识条目 media_id（来自 ima_browse 或 ima_search 结果中的非文件夹条目）。' },
+      offset: { type: 'number', description: '可选，分段续读起始字符偏移（默认 0，单次返回最多 8000 字；上一次返回 hasMore: true 时传入 nextOffset）。' },
     },
     output: textOutput,
     async execute(args) {
@@ -599,6 +627,14 @@ export function apply(ctx) {
         const mediaId = String(args?.media_id ?? '').trim()
         if (!mediaId) {
           throw new PublicRequestError(400, 'IMA_MEDIA_REQUIRED', '请从 ima_browse 或 ima_search 结果中获取 media_id。')
+        }
+        let offset = 0
+        if (args?.offset !== undefined && args?.offset !== null && args?.offset !== '') {
+          const parsedOffset = Number(args.offset)
+          if (!Number.isInteger(parsedOffset) || parsedOffset < 0 || parsedOffset > 2_000_000) {
+            throw new PublicRequestError(400, 'IMA_OFFSET_INVALID', 'offset 必须为 0 至 2000000 的整数。')
+          }
+          offset = parsedOffset
         }
         if (mediaId.startsWith('folder_')) {
           return `media_id "${mediaId}" 是文件夹，不能用 ima_read 读取。请调用 ima_browse 并传入 folder_id="${mediaId}" 展开查看该文件夹内的文档。`
@@ -616,13 +652,7 @@ export function apply(ctx) {
               target_content_format: 0,
             })
             if (noteData?.content) {
-              const text = String(noteData.content)
-              return [
-                `media_id: ${mediaId}（IMA 笔记原文）：`,
-                text.slice(0, 8000),
-                text.length > 8000 ? `\n…（原文共 ${text.length} 字，已截断前 8000 字）` : '',
-                '引用时请注明资料标题与出处，只引用原文中真实出现的政策文号。',
-              ].filter(Boolean).join('\n')
+              return formatImaReadChunk(mediaId, 'IMA 笔记原文', String(noteData.content), offset)
             }
           } catch {
             // Preserve the limited metadata projection below when a note cannot be read.
@@ -632,12 +662,7 @@ export function apply(ctx) {
         if ((data.media_type === 7 || data.media_type === 13) && data.url_info?.url) {
           try {
             const text = await readImaTextDownload(data.url_info.url)
-            return [
-              `media_id: ${mediaId}（Markdown/文本原文）：`,
-              text.slice(0, 8000),
-              text.length > 8000 ? `\n…（原文共 ${text.length} 字，已截断前 8000 字）` : '',
-              '引用时请注明资料标题与出处，只引用原文中真实出现的政策文号。',
-            ].filter(Boolean).join('\n')
+            return formatImaReadChunk(mediaId, 'Markdown/文本原文', text, offset)
           } catch {
             // Download failures must never expose server-provided URLs or headers.
           }
@@ -664,19 +689,20 @@ export function apply(ctx) {
     },
   })
 
-  // ── 工具 5：10 场景确定性税额与差额对账引擎 ──────────────────
+  // ── 工具 5：11 场景确定性税额与差额对账引擎 ──────────────────
   ctx.tools.register({
     name: 'fintax_calc',
     description:
-      '确定性财税试算与对账引擎（免配 IMA 亦可离线运行，严禁 LLM 心算替代），支持 10 大场景：' +
+      '确定性财税试算与对账引擎（免配 IMA 亦可离线运行，严禁 LLM 心算替代），支持 11 大场景：' +
       'platform_tax_reconcile 对照平台报送、财务会计、增值税与出口、企业所得税四个口径，并独立核对资金放款；' +
       'export_invoice_breakeven 供应商开票加点「拿专票退税 vs 合规无票免税」毛利临界点与所得税联动测算；' +
       'export_rebate 外贸企业出口免退税（孰低规则+征退税率差转成本）；' +
       'export_rebate_manufacturer 生产企业出口“免、抵、退”税五步法测算（含免抵税额计征附加税预警）；' +
-      'cbec_assessed_cit 综试区零售出口4%核定应税所得率及小型微利企业条件试算；' +
+      'export_rebate_cancel_impact 出口退税取消/下调（2026年第2号/第29号/第11号第七条视同内销征税）与电池消费税（2026年第20号 CMA 报告门禁/成品充电宝豁免）双税毛利冲击及保毛利涨价测算；' +
+      'cbec_assessed_cit 综试区零售出口4%核定应税所得率、小型微利条件及300万超崖跳变对照试算；' +
       'cbec_return_duty_exempt 2026年第16号公告跨境电商出口退运专项资格与条件测算（2026–2027申报，1210按出区离境起算）；' +
       'vat_taxpayer_threshold 500万一般纳税人强制认定临界与进项专票抵扣拐点测算；' +
-      'annual_bonus_iit 年终奖单独计税个税（含多发一元临界点陷阱检测）；' +
+      'annual_bonus_iit 年终奖个税（单独计税 vs 并入综合所得双轨最优比选 + 6档多发一元临界陷阱检测）；' +
       'cross_border_import 跨境电商零售进口综合税（限额内70%口径+超限预警）；' +
       'vat 增值税价税分离。',
     parameters: {
@@ -684,7 +710,7 @@ export function apply(ctx) {
         type: 'string',
         required: true,
         description:
-          'platform_tax_reconcile | export_invoice_breakeven | export_rebate | export_rebate_manufacturer | cbec_assessed_cit | cbec_return_duty_exempt | vat_taxpayer_threshold | annual_bonus_iit | cross_border_import | vat',
+          'platform_tax_reconcile | export_invoice_breakeven | export_rebate | export_rebate_manufacturer | export_rebate_cancel_impact | cbec_assessed_cit | cbec_return_duty_exempt | vat_taxpayer_threshold | annual_bonus_iit | cross_border_import | vat',
       },
       params: {
         type: 'object',
@@ -694,10 +720,11 @@ export function apply(ctx) {
           'export_invoice_breakeven: {barePurchaseAmount, supplierMarkupRate, vatRate=0.13, rebateRate=vatRate, exportRevenue?, otherDeductibleExpenses=0, invoicedCitRate=0.05, noInvoiceRevenueCitRate=0.002}；' +
           'export_rebate: {purchaseAmount, vatRate=0.13, rebateRate=vatRate}；' +
           'export_rebate_manufacturer: {exportFobCny, totalInputVat, vatRate=0.13, rebateRate=vatRate, dutyFreeMaterialsCny=0, domesticOutputVat=0, priorCreditCarryover=0}；' +
+          'export_rebate_cancel_impact: {purchaseGrossCny, exportFobCny, vatRate=0.13, oldRebateRate=0.06, newRebateRate=0, cancelAppliesDeemedDomesticVat=true, isConsumptionTaxItem=false, isFinishedPowerBank=false, consumptionTaxRate=0.02, hasValidCmaReport?, exportConsumptionTaxExempt=true, otherCostsCny=0}；' +
           'cbec_assessed_cit: {revenue, assessedQualificationConfirmed?, taxableIncomeRate=0.04, citRate=0.25, taxYear?, annualTaxableIncome?, annualAverageEmployees?, annualAverageAssets?, nonRestrictedIndustry?, smallLowProfit?}，revenue 填同一主体同一纳税年度收入；' +
           'cbec_return_duty_exempt: {customsCode, exportValueCny, exportDate, returnDate, departureDate?, zoneExitDate?, returnedOutsideZone?, returnReason="unsold"|"customer_return"|"other", tariffRate=0.10, importVatRate=0.13, consumptionTaxRate=0, inOriginalCondition, isFood, refundedExportTax, exportRefundRepaid?, hasTaxCertificate}，日期 YYYY-MM-DD，1210 需填出区离境日期和是否退回境内区外；' +
           'vat_taxpayer_threshold: {rolling12mTaxableSales, projectedAnnualGrossSales?, deductibleCostRatio=0.65, inputVatRate=0.13, generalOutputRate=0.13, smallScaleRate=0.01, hasExportRebateDemand=true, taxPeriod?="month"|"quarter", periodTaxableSales?, periodWaivedSales=0}，月/季起征点需同时填计税期间和不含税销售额；' +
-          'annual_bonus_iit: {bonus}；' +
+          'annual_bonus_iit: {bonus, annualComprehensiveTaxableIncome?, annualSalary?, basicDeduction=60000, socialInsurance=0, specialAdditionalDeduction=0, otherDeductions=0}；' +
           'cross_border_import: {price, vatRate=0.13, consumptionTaxRate=0, discount=0.7, singleLimit=5000, annualLimit=26000, annualUsed=0}；' +
           'vat: {amount, rate=0.13, inclusive=true}。比例/税率均传 0~1 小数。',
       },
@@ -911,6 +938,11 @@ export function apply(ctx) {
                 `── 三段资金链路交叉核对（平台放款 → 结汇通道 → 钱包转出至企业户[待核银行回单]）──`,
                 `· ① 销售平台实际放款：${s1Txt} ｜ ② 结汇通道平台入账：¥${fc.stage2WalletInboundCny.toFixed(2)}${fc.stage2OtherInboundCny > 0 ? `（+其他入账 ¥${fc.stage2OtherInboundCny.toFixed(2)}）` : ''} ｜ 一/二段差额：${gapTxt}`,
                 `· ③ 钱包转出至企业户(待核银行回单)：¥${fc.stage3CorporateRepatriatedCny.toFixed(2)}（企业户转出占比 ${rateTxt}）｜ 私户提现(P0)：¥${fc.stage3PersonalWithdrawCny.toFixed(2)} ｜ 待核提现(P1)：¥${(fc.stage3UnverifiedWithdrawCny || 0).toFixed(2)} ｜ 境外坐支(P1)：¥${fc.directSpendCny.toFixed(2)} ｜ 期末余额：${yuan(fc.closingBalanceCny)} ｜ 银行实收：待补回单`,
+                ...(fc.candidateMatches?.length
+                  ? [
+                      `· 参考级候选配对（待补主体/账号/回单确认，不替代法定核销，共 ${fc.candidateMatches.length} 组）：${fc.candidateMatches.map((m) => `${m.platform}(${m.period}) ${m.currency} ${m.payoutAmount.toFixed(2)}→${m.inboundAmount.toFixed(2)}[差 ${m.diffAmount.toFixed(2)}]`).join('；')}`,
+                    ]
+                  : []),
                 ...(fc.stage3StatusNote ? [`· 口径提示：${fc.stage3StatusNote}`] : []),
                 ...fc.alerts.map((a) => `· ${a}`),
               )
@@ -1001,7 +1033,7 @@ export function apply(ctx) {
     })
   }
 
-  console.log(`[fintax] 财税工作台 v${PKG_VERSION} 已加载：6 个工具（11 通道账单与结汇链离线体检雷达 + 10 大确定性算税场景 + 12 个月滚年归档）+ 4 个技能`)
+  console.log(`[fintax] 财税工作台 v${PKG_VERSION} 已加载：6 个工具（11 通道账单与结汇链离线体检雷达 + 11 大确定性算税场景 + 12 个月滚年归档）+ 4 个技能`)
 }
 
 /** 极简 frontmatter 解析：只取 name / description（单行值），其余交给正文。 */

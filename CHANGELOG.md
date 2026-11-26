@@ -2,6 +2,28 @@
 
 All notable changes to `dsh-fintax` will be documented in this file.
 
+## [0.8.6] - 2026-11-26
+
+### Fixed (Host Compatibility, Statement Parsing & API Diagnostics)
+- **DSH Desktop Dark Theme Selector Alignment (`client.js`)**：在深色主题 CSS 选择器中补充 `body[data-ds-dark-theme] .ftx-root, [data-ds-dark-theme] .ftx-root`，修复在 DSH Desktop `0.2.2+`（`data-ds-dark-theme` 属性）下工作台未能随宿主自动切换暗黑铝壳配色的兼容问题。
+- **XLSX Excel Serial Date Decoding (`lib/statement.js`)**：增强 `readXlsxSheets` 解析 `xl/styles.xml`（`<numFmts>` 与 `<cellXfs>`）及 `xl/workbook.xml`（`date1904` 标记），导出 `excelSerialToIsoDate`，将 TikTok Shop / 速卖通 / Shopee / 结汇 `.xlsx` 中纯序列号日期准确还原为 `YYYY-MM-DD`，修复归档账期退化为无日期的问题。
+- **Stage 1→2 Dual-Track Candidate Matching (`lib/report.js`, `lib/platforms_v8.js`, `client.js`, `index.js`)**：严守既有 5 键法定核销口径不变（`stage1to2Status` / `stage1to2GapCny` 保持零回归），新增独立脱敏的 **`candidateMatches`（参考级候选配对）**，按同币种 + 账期 + 来源平台展示待补主体/账号/回单确认的金额对照，并在工作台、HTML/MD 诊断报告及工具输出中清晰标注「参考级候选配对（不替代法定 5 键核销）」。
+- **`/api/fintax/calc` Validation Error Pass-Through (`lib/calc_shared.js`, `lib/calc.js`, `lib/calc_extra.js`, `index.js`)**：抽象统一 `CalcInputError`（`INVALID_CALC_INPUT`）校验异常；HTTP `/api/fintax/calc` 安全透传脱敏单行中文参数校验说明（HTTP 400、零堆栈泄露），不再笼统吞成「算税失败」。
+- **Signed Reversals, Expanded Corporate Suffixes & Stale Lock Self-Heal (`lib/platforms_extra.js`, `lib/platforms_v7.js`, `lib/platforms_v8.js`, `lib/local_store.js`)**：
+  - 修正 Temu / AliExpress / Shopee 费用与退款列保留真实符号，避免手续费冲回/退佣触发误报 P0 水平失衡；
+  - 扩充第三方结汇对公收款方识别覆盖 `个体工商户 / 商行 / 经营部 / 工作室 / 合伙企业 / 贸易行 / 实业 / 集团 / Pte / GmbH / Sarl / BV / Plc`（严守个人私户与坐支优先拦截）；
+  - 增强 `lib/local_store.js` `.lock` 过期僵死锁自愈（默认 `30s` 超时）与短时同步重试，同时保留活跃并发锁的 `LOCAL_DATA_BUSY` 保护。
+
+### Added (11th Tax Engine, Dual-Track Calculators, `ima_read` Pagination & Policy Sync)
+- **第 11 大确定性算税引擎 `export_rebate_cancel_impact` (`lib/calc_extra.js`, `lib/calc.js`, `client.js`, `index.js`)**：支持退税率取消/下调（2026年第2号/第29号/第11号第七条视同内销征税 vs 免税不退对照）与 2026#20 电池消费税双税毛利冲击及保毛利需涨价幅度精算，明确区分成品充电宝/成套储能不征电池消费税、2% 减征与新技术免征 CMA 报告硬门禁，以及 2026#2/#29 第三条出口消费税退免照旧（零私域字典硬编码）。
+- **年终奖双轨比选升级 (`annual_bonus_iit`) 与 9810/300 万超崖对照 (`cbec_assessed_cit`) (`lib/calc.js`, `client.js`)**：
+  - `annual_bonus_iit` 100% 向后兼容旧入参，并新增「单独计税 vs 并入综合所得」双轨对比（支持负值剩余扣除额与工资+扣除项自动推算）及 6 大实务盲区预警；
+  - `cbec_assessed_cit` 新增 300 万小微超崖税负跳变对照（`cliffComparison`：多赚 1 元多缴 60 万元）与 9810 次年 4 月核算期未售冲减硬提示。
+- **`ima_read` 分段续读 (`offset`) 与 IMA V2.4.2 检索锚点同步 (`index.js`, `lib/ima.js`, `skills/`)**：
+  - `ima_read` 新增 `offset` 参数，单次返回 8,000 字并返回 `hasMore` / `nextOffset`，彻底解决长法条/长 SOP 截断；
+  - `lib/ima.js` 末尾增补 V2.4.2 热点短词（`CMA`、`锂原电池`、`充电宝`、`年终奖`、`常州`、`225万`、`9610试点`、`1%预缴`、`FIOR`、`CTPAT`、`ViDA`、`DAC7`、`1099-K`、`2026#162` 等）并修复大小写去重；
+  - 4 个内嵌技能全面同步 2026 年末关账 4 项硬检、2026#20 锂电与一般光伏电池分期日期、9610 征求意见稿防误读、美线 FIOR `2027-01-05` + `CTPAT-validated` 口径，以及 `--profile desktop` 安装指引。
+
 ## [0.8.5] - 2026-11-21
 
 - **IMA V2.4.1 热点短词检索与内置技能口径同步 (`lib/ima.js`, `test/ima.test.js`, `skills/`)**：

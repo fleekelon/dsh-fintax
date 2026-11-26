@@ -31,13 +31,13 @@ window.__ModuleLoader__.load({
         title: '财税工作台',
         subtitle: 'dsh-fintax',
         tabRadar: '账单离线排雷',
-        tabCalc: '10 大确定性算税',
+        tabCalc: '11 大确定性算税',
         tabSettings: 'IMA 知识库与设置',
         localPill: '本地离线初筛',
         statusReadyFile: 'IMA 知识库 · 已就绪',
         statusReadyEnv: 'IMA 知识库 · 环境变量',
         statusReadyMixed: 'IMA 知识库 · 混合凭证',
-        statusMissing: '未配 IMA（排雷与 10 大算税离线可用）',
+        statusMissing: '未配 IMA（排雷与 11 大算税离线可用）',
         defaultKbBound: '已绑定 ',
         defaultKbNone: '未绑定默认库',
         dropTitle: '拖入原始结算账单 / .ZIP',
@@ -94,7 +94,7 @@ window.__ModuleLoader__.load({
         title: 'FinTax Workbench',
         subtitle: 'dsh-fintax',
         tabRadar: 'Statement Radar',
-        tabCalc: '10 Tax Calculators',
+        tabCalc: '11 Tax Calculators',
         tabSettings: 'IMA & Settings',
         localPill: 'Local Offline Audit',
         statusReadyFile: 'IMA Ready',
@@ -289,6 +289,26 @@ window.__ModuleLoader__.load({
         ],
       },
       {
+        code: 'export_rebate_cancel_impact', group: 'export', isNew: true, zh: '退税取消与电池消费税双税冲击', en: 'Rebate Cancellation & Battery Excise Impact',
+        desc: '对比保留原退税 vs 取消退税适用 2026#11 第七条视同内销征税（含 2026#20 电池消费税 2%→4% CMA 门禁、成品充电宝豁免及保毛利需涨价测算）。',
+        fields: [
+          { key: 'purchaseGrossCny', label: '含税采购金额（元，如 113）', def: '113' },
+          { key: 'exportFobCny', label: '出口离岸价 FOB（元，如 135.60）', def: '135.60' },
+          { key: 'oldRebateRate', label: '原出口退税率（如电池 0.06 / 光伏 0.13）', def: '0.06' },
+          { key: 'newRebateRate', label: '调整后退税率（归零填 0 / 新能源车填 0.09）', def: '0' },
+          { key: 'isConsumptionTaxItem', label: '属 2026#20 列明应税电池/光伏电池', type: 'bool', def: false },
+          { key: 'isFinishedPowerBank', label: '为成品充电宝（用电充电系统，不在电池消费税范围）', type: 'bool', def: false },
+        ],
+        advancedFields: [
+          { key: 'vatRate', label: '增值税税率（默认 0.13）', def: '0.13' },
+          { key: 'cancelAppliesDeemedDomesticVat', label: '退税归零按 2026#11 第七条视同内销征税', type: 'bool', def: true },
+          { key: 'consumptionTaxRate', label: '消费税率（2026-09 起 0.02 / 2027-09 起 0.04）', def: '0.02' },
+          { key: 'hasValidCmaReport', label: '首次申报减免前已备齐有效 CMA 附表覆盖报告', type: 'confirmation', def: '' },
+          { key: 'exportConsumptionTaxExempt', label: '出口消费税退（免）税照旧保留（2026#2/#29第三条）', type: 'bool', def: true },
+          { key: 'otherCostsCny', label: '其他物流/报关/佣金成本（元）', def: '0' },
+        ],
+      },
+      {
         code: 'export_rebate', group: 'export', zh: '外贸企业出口免退税', en: 'Trading Export VAT Rebate',
         desc: '按专票不含税额与征退税率孰低规则精算应退税额及征退税率差转成本。',
         fields: [
@@ -298,9 +318,19 @@ window.__ModuleLoader__.load({
         ],
       },
       {
-        code: 'annual_bonus_iit', group: 'general', zh: '年终奖个税与一元陷阱', en: 'Annual Bonus IIT Cliff',
-        desc: '除以 12 找档单独计税，检测多发 1 元到手反少几千元的临界倒挂区间。',
-        fields: [{ key: 'bonus', label: '全年一次性奖金总额（元）', def: '36001' }],
+        code: 'annual_bonus_iit', group: 'general', isNew: true, zh: '年终奖双轨比选与 6 盲区', en: 'Annual Bonus Dual-Track IIT',
+        desc: '支持「单独计税 vs 并入综合所得」双向最优比选（留空综合所得则仅算单独计税），同步检测 6 档多发 1 元倒挂陷阱。',
+        fields: [
+          { key: 'bonus', label: '全年一次性奖金总额（元）', def: '36001' },
+          { key: 'annualComprehensiveTaxableIncome', label: '不含奖金年综合所得应纳税所得额（元，可填负值/留空）', def: '' },
+          { key: 'annualSalary', label: '或填年税前工资薪金（元，自动扣 6 万及下方项）', def: '' },
+        ],
+        advancedFields: [
+          { key: 'basicDeduction', label: '年度基本减除费用（默认 60000）', def: '60000' },
+          { key: 'socialInsurance', label: '全年三险一金个人缴纳（元）', def: '0' },
+          { key: 'specialAdditionalDeduction', label: '全年专项附加扣除（元）', def: '0' },
+          { key: 'otherDeductions', label: '其他依法扣除（元）', def: '0' },
+        ],
       },
       {
         code: 'cross_border_import', group: 'general', zh: '跨境零售进口综合税', en: 'Cross-Border Retail Import Tax',
@@ -462,7 +492,7 @@ window.__ModuleLoader__.load({
         border-radius: 6px;
         -webkit-font-smoothing: antialiased;
       }
-      body.dark .ftx-root, .dark .ftx-root, [data-theme="dark"] .ftx-root {
+      body.dark .ftx-root, .dark .ftx-root, [data-theme="dark"] .ftx-root, body[data-ds-dark-theme] .ftx-root, [data-ds-dark-theme] .ftx-root {
         --ftx-paper: #161815;
         --ftx-surface: #20231e;
         --ftx-chassis: linear-gradient(125deg, #222620 4%, #1b1e19 58%, #222620 100%);
@@ -1457,6 +1487,23 @@ window.__ModuleLoader__.load({
             ),
             h('div', { className: 'ftx-hist-text', style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, `钱包期间净流 ${money(fc.signedNetFlowCny)} · 期初余额 ${money(fc.openingBalanceCny)} · 期末余额 ${money(fc.closingBalanceCny)} · 滞留境外 ${money(fc.retainedOffshoreCny)}`),
             (fc.matchedCorporateReturnCny > 0 || fc.unmatchedReturnCny > 0) && h('div', { className: 'ftx-hist-text', style: { fontSize: 11.5, color: 'var(--ftx-mut)' } }, `企业户毛转出 ${money(fc.grossCorporateWithdrawCny)} · 已匹配企业户退汇 ${money(fc.matchedCorporateReturnCny)} · 待核退汇 ${money(fc.unmatchedReturnCny)}`),
+            fc.candidateMatches && fc.candidateMatches.length > 0 &&
+              h(
+                'div',
+                { style: { display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 10px', border: '1px dashed var(--ftx-gap-bd)', borderRadius: 4, background: 'var(--ftx-surface)' } },
+                h('div', { style: { fontSize: 11.5, fontWeight: 700, color: 'var(--ftx-gap-fg)' } }, `参考级候选配对（待补主体/账号/回单确认，不替代法定 5 键核销 · ${fc.candidateMatches.length} 组）`),
+                h(
+                  'div',
+                  { style: { display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11, color: 'var(--ftx-mut)' } },
+                  ...fc.candidateMatches.map((m, i) =>
+                    h(
+                      'span',
+                      { key: `${m.platform}-${m.currency}-${i}`, className: 'ftx-mono ftx-hist-text', title: m.matchBasis, style: { padding: '2px 7px', border: '1px solid var(--ftx-line)', borderRadius: 3, background: 'var(--ftx-paper)' } },
+                      `${m.platform}(${m.period}) ${m.currency} ${Number(m.payoutAmount).toLocaleString()} → ${Number(m.inboundAmount).toLocaleString()} · 差 ${Number(m.diffAmount).toLocaleString()} [待确认]`,
+                    ),
+                  ),
+                ),
+              ),
             fc.stage3StatusNote &&
               h('div', { style: { fontSize: 11.5, color: 'var(--ftx-mut)', lineHeight: 1.45 } }, `口径提示：${fc.stage3StatusNote}`),
             fc.byCurrency && fc.byCurrency.length > 0 &&
@@ -1867,7 +1914,7 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'ftx-inst-head' },
               h('span', { style: { fontSize: 16.5 } }, isZh ? sc.zh : sc.en),
-              h('small', null, sc.isNew ? 'V0.7 / DETERMINISTIC' : '0 TOKEN / LOCAL'),
+              h('small', null, sc.isNew ? 'DETERMINISTIC / 0 TOKEN' : '0 TOKEN / LOCAL'),
             ),
             h('div', { style: { fontSize: 12.5, color: 'var(--ftx-mut)', lineHeight: 1.5, marginTop: -6 } }, sc.desc || t.fourLayers),
             h(
