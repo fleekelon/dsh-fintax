@@ -2,6 +2,11 @@
 
 All notable changes to `dsh-fintax` will be documented in this file.
 
+## [0.9.1] - 2026-11-27
+
+### Fixed
+- **Removed `conversation.input.dock` injection (`src/client/main.js`, `src/client/styles.js`, `src/client/i18n.js`, `client.js`)**: Removed the unstyled full-width "财税速问 / FinTax Ask" button previously mounted above the chat input box on DSH `0.2.3+` hosts so regular conversations remain clean and uncluttered. The plugin now mounts exclusively to `sidebar.panellist` + `main`, `settings.section.icon`, and `settings.section`, with a regression test enforcing that `conversation.input.dock` stays unregistered.
+
 ## [0.9.0] - 2026-11-27
 
 ### Added (17 Channels, Stage 3 Bank Receipts, 14 Tax Engines, Annual Q1–Q4 & Modular Client)

@@ -89,9 +89,9 @@ export function assembleClientBundle() {
     ` * Modules (${CLIENT_MODULES.length}): ${CLIENT_MODULES.join(', ')}`,
     ` * Source SHA-256 (prefix): ${sourceHash}`,
     ' *',
-    ' * dsh-fintax v0.9.0 — 桌面端独立财税工作台 + 图形化设置页（免构建 ModuleLoader 单文件产物）。',
+    ' * dsh-fintax v0.9.1 — 桌面端独立财税工作台 + 图形化设置页（免构建 ModuleLoader 单文件产物）。',
     ' * 设计语言：Dieter Rams / Braun 精密计算仪器风（哑光铝壳 + 橄榄绿 LCD 屏 + 动态双指针红线表盘 + 信号橙预警）。',
-    ' * 挂载槽位：sidebar.panellist + main、settings.section.icon、settings.section、conversation.input.dock（DSH 0.2.3+ 安全探测）。',
+    ' * 挂载槽位：sidebar.panellist + main、settings.section.icon、settings.section。',
     ' */',
   ].join('\n')
 

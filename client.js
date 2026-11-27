@@ -2,11 +2,11 @@
  * AUTO-GENERATED FILE — DO NOT EDIT DIRECTLY.
  * Generated from `src/client/*` via `node scripts/build-client.mjs` (zero-dependency deterministic build).
  * Modules (15): constants.js, i18n.js, styles.js, api.js, components.js, calc_specs_base.js, calc_specs.js, ima_drawer.js, stage3_panel.js, audit_tables.js, tab_audit.js, tab_calc.js, tab_annual.js, settings.js, main.js
- * Source SHA-256 (prefix): 6f3ba26976422aea
+ * Source SHA-256 (prefix): 53c2e67848a47bb4
  *
- * dsh-fintax v0.9.0 — 桌面端独立财税工作台 + 图形化设置页（免构建 ModuleLoader 单文件产物）。
+ * dsh-fintax v0.9.1 — 桌面端独立财税工作台 + 图形化设置页（免构建 ModuleLoader 单文件产物）。
  * 设计语言：Dieter Rams / Braun 精密计算仪器风（哑光铝壳 + 橄榄绿 LCD 屏 + 动态双指针红线表盘 + 信号橙预警）。
- * 挂载槽位：sidebar.panellist + main、settings.section.icon、settings.section、conversation.input.dock（DSH 0.2.3+ 安全探测）。
+ * 挂载槽位：sidebar.panellist + main、settings.section.icon、settings.section。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-fintax',
@@ -19,7 +19,7 @@ window.__ModuleLoader__.load({
 
     const NS = 'settings.fintax'
     const PANEL_ID = 'dsh-fintax'
-    const CLIENT_VERSION = '0.9.0'
+    const CLIENT_VERSION = '0.9.1'
     const inject = ['slots', 'locale']
 
     const DEMO_FX = {
@@ -125,8 +125,6 @@ window.__ModuleLoader__.load({
         annualBackupTitle: '归档 JSON 安全备份与恢复',
         annualBackupExport: '一键导出备份 (.json)',
         annualBackupImport: '导入备份文件',
-        dockLabel: '财税速问',
-        dockTitle: '发起跨境财税政策或账单核对提问',
         updateAvailable: '发现新版本',
         credTitle: '1. 腾讯 IMA OpenAPI 只读凭证',
         credDesc: '前往 https://ima.qq.com/agent-interface 获取 Client ID 与 API Key。密钥只写不回显明文，仅作为请求头发送至官方 ima.qq.com。',
@@ -215,8 +213,6 @@ window.__ModuleLoader__.load({
         annualBackupTitle: 'Archive JSON Backup & Restore',
         annualBackupExport: 'Export Backup (.json)',
         annualBackupImport: 'Import Backup JSON',
-        dockLabel: 'FinTax Ask',
-        dockTitle: 'Start a cross-border tax or statement reconciliation prompt',
         updateAvailable: 'Update available',
         credTitle: '1. Tencent IMA OpenAPI Credentials',
         credDesc: 'Get Client ID & API Key at https://ima.qq.com/agent-interface. Write-only, sent exclusively to ima.qq.com.',
@@ -517,8 +513,6 @@ window.__ModuleLoader__.load({
           .ftx-drawer { width: min(100%, 440px); height: 100%; background: var(--ftx-paper); color: var(--ftx-ink); border-left: 1px solid var(--ftx-chassis-bd); box-shadow: -8px 0 24px rgba(0,0,0,0.22); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; z-index: 9999; }
           .ftx-drawer-hit { background: var(--ftx-surface); border: 1px solid var(--ftx-line); border-radius: 4px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
           .ftx-calc-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); gap: 9px; }
-          .ftx-dock-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 4px; border: 1px solid currentColor; background: transparent; color: inherit; font-size: 12px; font-weight: 600; cursor: pointer; opacity: 0.86; }
-          .ftx-dock-btn:hover { opacity: 1; }
         `
 
     function retainStyles() {
@@ -3515,7 +3509,7 @@ window.__ModuleLoader__.load({
     }
 
     // ── module: src/client/main.js ──
-    // Main workbench shell, dynamic locale subscription, IMA drawer host, and DSH 0.2.2/0.2.3 slot registration.
+    // Main workbench shell, dynamic locale subscription, IMA drawer host, and DSH slot registration.
 
 
     function FinTaxWorkbench({ lang, ctx, surface = 'settings' }) {
@@ -3659,51 +3653,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function ConversationDockAction({ ctx, owner = {} }) {
-      const isZh = getLang(ctx) !== 'en'
-      const t = COPY[isZh ? 'zh' : 'en']
-      const quickPrompt = isZh
-        ? '请帮我结合跨境财税规则与我的 IMA 知识库，核对本月账单三段资金链或测算欧盟/美线税负。'
-        : 'Help me reconcile my cross-border statements or calculate EU/US tax exposure using my IMA knowledge base.'
-      const onClick = () => {
-        try {
-          if (typeof owner?.insertText === 'function') { owner.insertText(quickPrompt); return }
-          if (typeof owner?.setInput === 'function') { owner.setInput(quickPrompt); return }
-          if (typeof ctx?.conversation?.insertInput === 'function') { ctx.conversation.insertInput(quickPrompt); return }
-          if (typeof ctx?.navigation?.openPanel === 'function') { ctx.navigation.openPanel(PANEL_ID); return }
-          navigator.clipboard?.writeText?.(quickPrompt)
-        } catch { /* silent */ }
-      }
-      return h('button', { type: 'button', className: 'ftx-dock-btn', title: t.dockTitle, onClick }, h(FinTaxMark, { size: 14 }), h('span', null, t.dockLabel))
-    }
-
-    /**
-     * Feature-detect and safely mount DSH 0.2.3+ `conversation.input.dock` slot.
-     * On DSH 0.2.2 hosts that do not expose this slot, silently skips with zero errors.
-     */
-    function registerConversationDockSafely(ctx, t) {
-      try {
-        if (typeof ctx?.slots?.inject !== 'function' || typeof ctx?.slots?.register !== 'function') return
-        const hasExplicitSlotCheck = typeof ctx.slots.has === 'function'
-        if (hasExplicitSlotCheck && !ctx.slots.has('conversation.input.dock')) return
-        const supported = Array.isArray(ctx.slots.available) ? ctx.slots.available.includes('conversation.input.dock') : true
-        if (!supported) return
-        ctx.slots.inject('conversation.input.dock', () => {
-          try {
-            const off = ctx.slots.register(
-              { name: 'conversation.input.dock', id: 'fintax-quick-ask', order: 42, label: () => t('dockLabel'), locale: NS },
-              (owner = {}) => h(ConversationDockAction, { ctx, owner }),
-            )
-            return typeof off === 'function' ? off : () => {}
-          } catch {
-            return () => {}
-          }
-        })
-      } catch {
-        // Host is likely DSH 0.2.2 without conversation.input.dock; ignore cleanly.
-      }
-    }
-
     function createPluginEntry() {
       const apply = (ctx) => {
         try {
@@ -3732,8 +3681,6 @@ window.__ModuleLoader__.load({
             )
             return typeof off === 'function' ? off : () => {}
           })
-
-          registerConversationDockSafely(ctx, t)
 
           ctx.slots.inject('settings.section', () =>
             ctx.slots.register(

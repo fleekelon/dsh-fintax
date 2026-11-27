@@ -215,7 +215,7 @@ test('v0.9 集成 4：/status 能力宣告、/calc/specs 与 14 大算税引擎�
 
   const st = await mockApiCall(handler, 'GET', '/api/fintax/status')
   assert.equal(st.statusCode, 200)
-  assert.equal(st.json.version, '0.9.0')
+  assert.equal(st.json.version, '0.9.1')
   assert.equal(st.json.supportedChannels, 17)
   assert.equal(st.json.calcEngineCount, 14)
   assert.deepEqual(st.json.capabilities, {
@@ -513,7 +513,7 @@ test('v0.9 集成 7：50,000 行 Amazon 性能不退化 + Track D 全量口径�
 
   // 零依赖检查 + Track D 文件口径与护城河门禁
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.9.0')
+  assert.equal(pkg.version, '0.9.1')
   assert.equal(pkg.dependencies, undefined)
   assert.equal(pkg.devDependencies, undefined)
   assert.equal(pkg.scripts['build:client'], 'node scripts/build-client.mjs')

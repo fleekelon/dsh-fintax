@@ -1,4 +1,4 @@
-# dsh-fintax — 财税工作台 (v0.9.0)
+# dsh-fintax — 财税工作台 (v0.9.1)
 
 [![npm version](https://img.shields.io/npm/v/dsh-fintax)](https://www.npmjs.com/package/dsh-fintax)
 [![CI](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml/badge.svg)](https://github.com/fleekelon/dsh-fintax/actions/workflows/test.yml)
@@ -12,7 +12,7 @@
 **一句话定位**：帮中国跨境卖家的财务在本机离线打通 **① 平台放款 → ② 结汇通道 → ③ 国内对公银行实收回单** 完整三段资金链，并把已对上的金额、银行扣费/汇损/在途差额、待补凭证与 **2026 Q1–Q4 年度三地交卷自检**，整理成一份能直接交给老板和会计的**月结/年度核对单**（默认纯洁无推广，纯 ESM，严格零第三方运行时与开发依赖，原始账单 100% 留在本机内存）。
 
 - **左侧边栏独立可视化工作台（Braun 精密仪表风格 · 模块化零依赖构建 · 0 Token 本地运行）**：
-  - 安装后在 DSH 左侧导航栏直接点击 **「财税工作台」**（兼容 **「设置 → 财税工作台」**、DSH `0.2.2` / `0.2.3` `conversation.input.dock` 特性探测与 `dsh-market` Update API v1 被动版本提示），无需配置 IMA 即可完成全流程核对与导出；
+  - 安装后在 DSH 左侧导航栏直接点击 **「财税工作台」**（兼容 **「设置 → 财税工作台」** 与 `dsh-market` Update API v1 被动版本提示），无需配置 IMA 即可完成全流程核对与导出；
   - **Tab 1 · 17 通道离线对账雷达 & Stage 3 国内银行回单 5 键核销**：拖入销售账单、第三方结汇流水、国内对公银行回单或 `.xlsx`/`.xlsm`/`.zip` 原包（支持一键体验 **`demo:v9`** 完整三段资金链），自动执行 **Stage 1→2→3 fail-closed 5 键核销**（主体 + 对公账号/尾号 + 账期 + 参考号 + 币种金额），清晰拆分法定实收 CNY、银行手续费、结汇汇损、在途差额与独立隔离的 **`stage3CandidateMatches` 参考级候选**；解析结果进纯内存短生命周期缓存（`cacheToken`，严格绑定宿主已鉴别的独占会话身份、严禁落盘，缺失独占会话身份时安全回退 `cacheToken: null`），导出老板版 HTML / MD / 派活 CSV 走 `POST /api/fintax/parse/export` 免重传 20 MiB Base64（过期自动无感降级并刷新 `cacheToken`）。
   - **Tab 2 · 14 项确定性交互试算**：在原有 11 项引擎基础上，新增 **`eu_low_value_parcel`**（欧盟 `≤€150` 低值包裹 `€3`×HS 项数 + `€2`×HS 项数退货不退处理费 & PID 含税抽佣向上取分反推售价）、**`us_t86_vs_9810_ddp`**（美线 Type 11 直邮 vs 9810 海外仓 DDP + 2027 FBA `+$0.19` 敏感度 + IEEPA/CAPE fail-closed 退税严检与 `ACE ACH Hold` + `2027-01-05` FIOR/`CTPAT-validated` 红线）与 **`fba_mixed_procurement_split`**（FBA 有票+无票混合采购拆单三方案净收益对比）；`GET /api/fintax/calc/specs` 暴露全部 14 引擎规格注册表。
   - **Tab 3 · 年度汇算（Q1–Q4）与归档管理 (`dsh-fintax-history-v4`)**：按自然年与稳定 `entityKey` 汇总 Q1–Q4 季度走势、双边同覆盖期差额、缺失月份、跨主体防混算保护与 **全球三地报送自检卡**（中国 810 号令平台按季报送与卖家内部全年勾稽 / 欧盟 DAC7 平台报送 `2027-01-31` 与主管机关交换分期 `2027-02-28` / 美国 IRS 1099-K TPSO 联邦 `>$20,000` 且 `>200` 笔双门槛、支付卡收单另核、收款人联 `2027-02-01` 与电子报送 IRS `2027-03-31` + 州级更低门槛）；支持一键导出年度老板 HTML/MD 报表、「待认领」与历史归档主体重分配（改店名保留原 `entityKey`、`409` 版本/业务键冲突分流保护）及带强制 SHA-256 完整性防损校验（区别于密码学来源签名）与按 UUID 幂等合并的 JSON 备份导入/导出。

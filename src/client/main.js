@@ -1,4 +1,4 @@
-// Main workbench shell, dynamic locale subscription, IMA drawer host, and DSH 0.2.2/0.2.3 slot registration.
+// Main workbench shell, dynamic locale subscription, IMA drawer host, and DSH slot registration.
 
 import { CLIENT_VERSION, NS, PANEL_ID, inject } from './constants.js'
 import { COPY, getLang, subscribeLang } from './i18n.js'
@@ -152,51 +152,6 @@ export function FinTaxWorkbench({ lang, ctx, surface = 'settings' }) {
   )
 }
 
-function ConversationDockAction({ ctx, owner = {} }) {
-  const isZh = getLang(ctx) !== 'en'
-  const t = COPY[isZh ? 'zh' : 'en']
-  const quickPrompt = isZh
-    ? '请帮我结合跨境财税规则与我的 IMA 知识库，核对本月账单三段资金链或测算欧盟/美线税负。'
-    : 'Help me reconcile my cross-border statements or calculate EU/US tax exposure using my IMA knowledge base.'
-  const onClick = () => {
-    try {
-      if (typeof owner?.insertText === 'function') { owner.insertText(quickPrompt); return }
-      if (typeof owner?.setInput === 'function') { owner.setInput(quickPrompt); return }
-      if (typeof ctx?.conversation?.insertInput === 'function') { ctx.conversation.insertInput(quickPrompt); return }
-      if (typeof ctx?.navigation?.openPanel === 'function') { ctx.navigation.openPanel(PANEL_ID); return }
-      navigator.clipboard?.writeText?.(quickPrompt)
-    } catch { /* silent */ }
-  }
-  return h('button', { type: 'button', className: 'ftx-dock-btn', title: t.dockTitle, onClick }, h(FinTaxMark, { size: 14 }), h('span', null, t.dockLabel))
-}
-
-/**
- * Feature-detect and safely mount DSH 0.2.3+ `conversation.input.dock` slot.
- * On DSH 0.2.2 hosts that do not expose this slot, silently skips with zero errors.
- */
-function registerConversationDockSafely(ctx, t) {
-  try {
-    if (typeof ctx?.slots?.inject !== 'function' || typeof ctx?.slots?.register !== 'function') return
-    const hasExplicitSlotCheck = typeof ctx.slots.has === 'function'
-    if (hasExplicitSlotCheck && !ctx.slots.has('conversation.input.dock')) return
-    const supported = Array.isArray(ctx.slots.available) ? ctx.slots.available.includes('conversation.input.dock') : true
-    if (!supported) return
-    ctx.slots.inject('conversation.input.dock', () => {
-      try {
-        const off = ctx.slots.register(
-          { name: 'conversation.input.dock', id: 'fintax-quick-ask', order: 42, label: () => t('dockLabel'), locale: NS },
-          (owner = {}) => h(ConversationDockAction, { ctx, owner }),
-        )
-        return typeof off === 'function' ? off : () => {}
-      } catch {
-        return () => {}
-      }
-    })
-  } catch {
-    // Host is likely DSH 0.2.2 without conversation.input.dock; ignore cleanly.
-  }
-}
-
 export function createPluginEntry() {
   const apply = (ctx) => {
     try {
@@ -225,8 +180,6 @@ export function createPluginEntry() {
         )
         return typeof off === 'function' ? off : () => {}
       })
-
-      registerConversationDockSafely(ctx, t)
 
       ctx.slots.inject('settings.section', () =>
         ctx.slots.register(

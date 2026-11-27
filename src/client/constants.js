@@ -2,7 +2,7 @@
 
 export const NS = 'settings.fintax'
 export const PANEL_ID = 'dsh-fintax'
-export const CLIENT_VERSION = '0.9.0'
+export const CLIENT_VERSION = '0.9.1'
 export const inject = ['slots', 'locale']
 
 export const DEMO_FX = {

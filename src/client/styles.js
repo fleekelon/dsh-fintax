@@ -207,8 +207,6 @@ export const FTX_CSS = `
       .ftx-drawer { width: min(100%, 440px); height: 100%; background: var(--ftx-paper); color: var(--ftx-ink); border-left: 1px solid var(--ftx-chassis-bd); box-shadow: -8px 0 24px rgba(0,0,0,0.22); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; z-index: 9999; }
       .ftx-drawer-hit { background: var(--ftx-surface); border: 1px solid var(--ftx-line); border-radius: 4px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
       .ftx-calc-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); gap: 9px; }
-      .ftx-dock-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 4px; border: 1px solid currentColor; background: transparent; color: inherit; font-size: 12px; font-weight: 600; cursor: pointer; opacity: 0.86; }
-      .ftx-dock-btn:hover { opacity: 1; }
     `
 
 export function retainStyles() {

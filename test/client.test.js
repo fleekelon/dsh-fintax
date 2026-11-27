@@ -795,40 +795,37 @@ test('IMA quick drawer enforces <=160 char snippet moat, strips HTML without dou
   assert.ok(byText(ui.drawer(), 'button', '前往设置页配置 IMA'))
 })
 
-test('DSH 0.2.2/0.2.3 conversation.input.dock degrades safely, dsh-market probe is passive, and live zh/en switch updates UI', async (t) => {
+test('DSH 0.2.2/0.2.3 keeps conversation.input.dock clean (never mounted), dsh-market probe is passive, and live zh/en switch updates UI', async (t) => {
   // 1) DSH 0.2.2 host throwing on unknown slot does not crash mount
   const ui22Throw = workbenchEx((path) => {
     if (path.endsWith('/history')) return response({ history: [] })
-    if (path.endsWith('/status')) return response({ version: '0.9.0' })
+    if (path.endsWith('/status')) return response({ version: '0.9.1' })
     return response({})
   }, { dockMode: '0.2.2-throw' })
   t.after(() => ui22Throw.unmount())
   assert.equal(ui22Throw.slots.has('main'), true)
   assert.equal(ui22Throw.slots.has('conversation.input.dock'), false)
 
-  // 2) DSH 0.2.2 host with slots.has('conversation.input.dock') === false skips registration cleanly
+  // 2) DSH 0.2.2 host with slots.has('conversation.input.dock') === false mounts sidebar & settings cleanly
   const ui22Has = workbenchEx((path) => {
     if (path.endsWith('/history')) return response({ history: [] })
-    if (path.endsWith('/status')) return response({ version: '0.9.0' })
+    if (path.endsWith('/status')) return response({ version: '0.9.1' })
     return response({})
   }, { dockMode: '0.2.2-has-false' })
   t.after(() => ui22Has.unmount())
   assert.equal(ui22Has.slots.has('conversation.input.dock'), false)
 
-  // 3) DSH 0.2.3 registers dock slot, probes dsh-market Update API v1 passively, and reacts to host language switch
-  const inserted = []
+  // 3) DSH 0.2.3+ keeps conversation.input.dock untouched, probes dsh-market Update API v1 passively, and reacts to host language switch
   const ui23 = workbenchEx((path) => {
     if (path.endsWith('/history')) return response({ history: [] })
-    if (path.endsWith('/status')) return response({ version: '0.9.0', capabilities: { dshMarketUpdateV1: true } })
+    if (path.endsWith('/status')) return response({ version: '0.9.1', capabilities: { dshMarketUpdateV1: true } })
     if (path.endsWith('/dsh-market/api/v1/capabilities')) return response({ plugins: [{ id: 'dsh-fintax', latestVersion: '0.9.5' }] })
     return response({})
   }, { dockMode: '0.2.3', lang: 'zh' })
   t.after(() => ui23.unmount())
-  assert.equal(ui23.slots.has('conversation.input.dock'), true)
-  const dockEl = ui23.slots.get('conversation.input.dock')({ insertText: (txt) => inserted.push(txt) })
-  const dockBtn = dockEl.type(dockEl.props)
-  dockBtn.props.onClick()
-  assert.equal(inserted.length, 1)
+  assert.equal(ui23.slots.has('conversation.input.dock'), false)
+  assert.equal(ui23.slots.has('sidebar.panellist'), true)
+  assert.equal(ui23.slots.has('settings.section'), true)
 
   ui23.renderRoot()
   await flush()
