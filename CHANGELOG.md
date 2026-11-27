@@ -2,6 +2,32 @@
 
 All notable changes to `dsh-fintax` will be documented in this file.
 
+## [0.9.0] - 2026-11-27
+
+### Added (17 Channels, Stage 3 Bank Receipts, 14 Tax Engines, Annual Q1–Q4 & Modular Client)
+- **6 New Channels & Amazon v9 Extensions (`lib/platforms_v9.js`, `lib/statement.js`)** — expanding offline coverage from 11 to **17 channels (11 sales platforms + 6 settlement wallets)** plus domestic bank receipts:
+  - **3 Domestic Settlement Wallets** (`role: 'settlement_wallet'`, strictly excluded from Stage 1 sales revenue): **LianLian (连连国际)**, **PingPong**, and **SUNRATE (寻汇)** with automatic inclusive/exclusive fee inference, FX spread tracking, corporate suffix recognition, personal-account P0 blocking, offshore direct-spend P1 detection, return-wire offsetting, and sanitized Stage 3 `outboundEvidence`.
+  - **3 Major Cross-Border Sales Platforms**: **SHEIN** (full-managed vs semi-managed/POP P0 mix blocking & signed fee reversals), **Walmart** (official long-table Reconciliation Report + wide WFS detail), and **Lazada** (Fee Name / VAT in Amount / Paid Status / WHT & signed commission reversals).
+  - **Amazon v9 Extensions**: FR/IT/ES localized Date Range headers & row types, 9 emerging sites (`SE/PL/BE/TR/AE/SA/BR/IN/IE`), and 2027 FBA new fee recognition (Consolidated Aged Monthly Storage, 3.5% AWD/MCD Fuel Surcharge, 6-Tier Oversize Fulfillment).
+- **Stage 3 Domestic Corporate Bank Receipt Reconciliation (`lib/bank_receipt.js`, `lib/report.js`, `index.js`)**:
+  - Parses domestic bank electronic receipts (CMB / BOC / ICBC / CCB / ABC / BOCOM / Generic) with preamble metadata extraction and non-corporate/personal P0 blocking.
+  - Strict fail-closed 5-key exact 1-to-1 matching (`entityKey + account/suffix + period + referenceKey + currency/amount within bank fee window`) isolating reference-only `stage3CandidateMatches` from legal matches; ships built-in 7-file **`demo:v9`** full-chain sandbox.
+  - Boss HTML, Markdown, and dispatch CSV reports present Stage 3 matched bank receipts, bank fees, FX spread, in-transit gaps, and reference candidates (zero-promo by default).
+- **3 New Cross-Border Tax Engines (`lib/calc_crossborder.js`, `lib/calc.js`, `GET /api/fintax/calc/specs`)** — expanding `fintax_calc` from 11 to **14 deterministic engines** (full 14-engine registry exposed on `GET /api/fintax/calc/specs`):
+  - `eu_low_value_parcel`: EU `≤€150` parcel `€3 × HS lines` temporary duty + `€2 × HS lines` non-refundable handling fee (excluded from IOSS), PID VAT-inclusive commission ceil-to-cent reverse pricing with `€150` intrinsic-value regime check, and 3-way EU warehouse comparison.
+  - `us_t86_vs_9810_ddp`: US Type 11 direct mail (`≤$2,500` informal entry gate) vs 9810 overseas warehouse DDP unit/monthly margins, `2027-01-15` FBA `+$0.19` toggle, fail-closed IEEPA/CAPE refund check (strictly rejects Section 301/232/122 & incomplete/out-of-window entries; `2026-02-24` cessation cutoff), `ACE ACH Hold` P0 alert, and `2027-01-05` CBP FIOR + `CTPAT-validated` redline.
+  - `fba_mixed_procurement_split`: 3-way net profit comparison for mixed invoiced + non-invoiced FBA batches (separating ending input VAT credit carryover from pre-tax operating profit/loss).
+- **Archive Schema v4, Natural-Year Q1–Q4 Summary, Reassign & Backup (`lib/history.js`, `lib/annual_report.js`, `index.js`)**:
+  - Upgraded local archive schema to `dsh-fintax-history-v4` (backward compatible with v1–v3; non-UUID legacy records are normalized to deterministic UUID primary IDs while preserving `legacyId` for lookup/delete/reassign compatibility) recording Stage 2/3 KPIs, sites, currencies, EU/US signals, and per-platform breakdown.
+  - Added `GET /api/fintax/history/annual` (`json`/`html`/`md`) featuring Q1–Q4 quarterly totals, bilateral matched-period gaps (with pending periods/amounts listed separately), strict `entityKey`-based cross-entity anti-mixing guard across all 3 jurisdictions, mixed original+FX estimation (`mixed_estimated`), UK+EUR non-DAC7 guard, `pending_data` incomplete-coverage gating, and refined **3-jurisdiction filing checklists** (China 810 quarterly platform reporting vs internal seller annual reconciliation, EU DAC7 platform `2027-01-31` vs authority exchange `2027-02-28`, US IRS 1099-K TPSO federal `>$20,000` & `>200` txns / PSE separate / recipient copy `2027-02-01` & IRS e-file `2027-03-31` + lower state thresholds).
+  - Added `POST /api/fintax/history/reassign` (claim/reassign snapshots preserving stable `entityKey` on shop renames, with HTTP `409` `revision_conflict` vs `source_key_collision` routing) and `GET/POST /api/fintax/history/backup` (UUID-idempotent merge preserving legal appended siblings, prototype-pollution guard, and mandatory HTTP SHA-256 **integrity/corruption checksum** verification — distinct from cryptographic provenance signing).
+- **In-Memory Parse Cache & IMA Quick Drawer (`lib/parse_cache.js`, `index.js`)**:
+  - `POST /api/fintax/parse` caches parsed summaries strictly in memory (`cacheToken`, bound to host-authenticated exclusive session identity — returns `cacheToken: null` safe fallback when absent, zero disk writes, soft-budget memory estimation); `POST /api/fintax/parse/export` renders HTML/MD/CSV from cache without re-uploading 20 MiB Base64 (`404 CACHE_EXPIRED` graceful fallback saving refreshed `cacheToken`).
+  - `POST /api/fintax/ima-quick` provides read-only workbench drawer lookup with strict 3-field plain-text contract (`{ title, folderPath, snippet }`, `≤160`-char snippet, URL/HTML/control-char stripped on all fields, zero internal IDs/full-text/download URLs).
+  - `GET /api/fintax/status` declares `supportedChannels: 17`, `calcEngineCount: 14`, and v0.9.0 `capabilities` flags.
+- **Modular Zero-Dependency Client Architecture (`src/client/*`, `scripts/build-client.mjs`, `client.js`, `locale/*`)**:
+  - Split client bundle into modular source files built deterministically via `npm run build:client` / `npm run check:client` (zero npm dependencies), adding Stage 3 UI, 14-engine forms, Annual Q1–Q4 & Backup/Reassign view, IMA quick drawer, dynamic bilingual subscription, DSH `0.2.3` `conversation.input.dock` feature-probing, and passive `dsh-market` Update API v1 detection.
+
 ## [0.8.6] - 2026-11-26
 
 ### Fixed (Host Compatibility, Statement Parsing & API Diagnostics)

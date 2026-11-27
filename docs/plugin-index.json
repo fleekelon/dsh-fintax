@@ -6,14 +6,20 @@
       "name": "dsh-fintax",
       "title": { "en": "FinTax workbench", "zh": "财税工作台" },
       "description": {
-        "en": "Standalone DSH sidebar FinTax workbench (Braun precision UI with DSH dark-theme support, zero-token offline auditor for 8 sales platforms + 3 settlement wallets WorldFirst/Payoneer/Airwallex with 3-stage fund-chain cross-check & candidate matches, Excel serial-date XLSX decoding, persisted custom FX presets, 11 deterministic tax calculators, 12M rolling trend HTML report & CSV export) plus read-only Tencent IMA policy Q&A with chunked reading.",
-        "zh": "DSH 左侧边栏独立可视化财税工作台（Braun 精密仪表风格 · 适配 DSH 暗黑主题）：0 Token 拖入 8 大跨境销售平台 + 3 大第三方结汇通道（万里汇/派安盈/空中云汇）原始账单与 .zip 包离线排雷、双轨三段资金链交叉核对、XLSX 序列号日期解码、自定义汇率持久化、12 个月双指针红线雷达与趋势月报、11 项确定性交互算税、HTML/CSV 导出及腾讯 IMA 政策引证与分段续读。"
+        "en": "Standalone DSH sidebar FinTax workbench (Braun precision modular UI with DSH dark-theme & 0.2.3 dock support, zero-token offline auditor for 11 sales platforms + 6 settlement wallets + domestic corporate bank receipt Stage 3 5-key reconciliation, in-memory cached fast export, 14 deterministic tax calculators incl. EU EUR 3+2 parcel / US Type 11 vs 9810 DDP & IEEPA / FBA mixed split, Q1-Q4 annual summary with 2027-01-31 CN-810/EU-DAC7/US-1099K filing checklists, archive reassign/backup, and read-only Tencent IMA quick drawer).",
+        "zh": "DSH 左侧边栏独立可视化财税工作台（Braun 精密仪表风格 · 模块化零依赖构建 · 适配 DSH 暗黑主题与 0.2.3 槽位）：0 Token 离线核对 11 大跨境销售平台 + 6 大第三方结汇通道（万里汇/派安盈/空中云汇/连连/PingPong/寻汇）+ 国内对公银行回单 Stage 3 五键实收核销（demo:v9）、缓存免重传极速导出、14 项确定性算税（含欧盟€3+€2低值包裹、美线 Type 11 vs 9810 DDP 与 IEEPA/FIOR、FBA 混合采购拆单）、自然年 Q1–Q4 老板报表与 2027-01-31 全球三地（810/DAC7/1099-K）交卷自检、归档主体认领/安全备份及工作台 IMA 只读轻检索侧抽屉。"
       },
       "author": "fleekelon",
       "homepage": "https://fleekelon.github.io/fintax-portal/",
       "repository": { "url": "https://github.com/fleekelon/dsh-fintax" },
       "icon": "https://raw.githubusercontent.com/fleekelon/dsh-fintax/main/assets/icon.svg",
       "versions": [
+        {
+          "version": "0.9.0",
+          "publishTimestamp": 1795742400,
+          "source": { "type": "npm" },
+          "engines": { "dsh": ">=0.2.1-rc.2 <1.0.0" }
+        },
         {
           "version": "0.8.6",
           "publishTimestamp": 1795705200,

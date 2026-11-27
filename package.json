@@ -1,7 +1,7 @@
 {
   "name": "dsh-fintax",
-  "version": "0.8.6",
-  "description": "跨境月结核对单与财税工作台：DSH 侧边栏 0 Token 离线核对 8 大销售平台 + 3 大结汇通道（万里汇/派安盈/空中云汇）平台放款与待核回单、双轨参考候选配对、防串账主体归档、11 项确定性算税（含退税取消/电池消费税双税冲击与年终奖双轨比选）、纯洁版老板核对单与财务派活 CSV、腾讯 IMA 法规检索。FinTax workbench for DeepSeek Harness.",
+  "version": "0.9.0",
+  "description": "跨境月结核对单与年度财税工作台：DSH 侧边栏 0 Token 离线核对 11 大销售平台 + 6 大结汇通道（万里汇/派安盈/空中云汇/连连/PingPong/寻汇）+ 国内对公银行回单 Stage 3 五键核销、缓存加速导出、14 项确定性算税（含欧盟€3+€2/美线T86与9810 DDP及IEEPA/FBA混合采购拆单）、自然年 Q1–Q4 汇总与 2027-01-31 三地（中国810/欧盟DAC7/美国1099-K）交卷自检、主体认领与备份恢复、工作台 IMA 轻检索侧抽屉。FinTax workbench for DeepSeek Harness.",
   "author": "fleekelon",
   "type": "module",
   "main": "./index.js",
@@ -43,7 +43,9 @@
     "url": "git+https://github.com/fleekelon/dsh-fintax.git"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "build:client": "node scripts/build-client.mjs",
+    "check:client": "node scripts/build-client.mjs --check"
   },
   "dsh": {
     "bundle": {

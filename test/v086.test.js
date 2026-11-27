@@ -231,7 +231,8 @@ test('v0.8.6 第 11 大引擎 export_rebate_cancel_impact：2026#11 视同内销
     hasValidCmaReport: false,
   })
   assert.equal(batteryNoCma.consumptionTaxApplies, true)
-  assert.equal(batteryNoCma.domesticConsumptionTaxRef, 2000)
+  assert.equal(batteryNoCma.domesticConsumptionTaxRef, 4000)
+  assert.equal(batteryNoCma.conditionalCmaConsumptionTaxRef, 2000)
   assert.equal(batteryNoCma.cmaRiskExtraTax, 2000)
   assert.ok(batteryNoCma.warnings.some((w) => w.includes('CMA') && w.includes('2027-04-01')))
   assert.ok(batteryNoCma.warnings.some((w) => w.includes('出口消费税退（免）税政策')))

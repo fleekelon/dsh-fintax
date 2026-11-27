@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "FinTax workbench",
-    "description": "DSH sidebar workbench for offline statements and .zip archives from 8 sales platforms plus 3 settlement wallets (WorldFirst, Payoneer, Airwallex) with 3-stage fund-chain cross-checking, 11 tax calculators (including rebate cancellation/battery excise impact & dual-track annual bonus IIT), rolling 12-month trend reports, CSV exports, and Tencent IMA policy search."
+    "description": "DSH sidebar workbench for offline statements, .zip archives, and domestic corporate bank receipts across 11 sales platforms and 6 settlement wallets with Stage 3 5-key reconciliation, 14 deterministic tax calculators (EU EUR 3+2 parcels, US Type 11 vs 9810 DDP with IEEPA/FIOR gates, FBA mixed procurement split), annual Q1–Q4 & 2027-01-31 3-jurisdiction compliance checks, entity reassignment/backup, and an inline Tencent IMA citation drawer."
   }
 }
